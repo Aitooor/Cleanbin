@@ -1,0 +1,126 @@
+/* General Reset */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    background-color: #1e1e1e !important;
+    color: #e0e0e0;
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    overflow-x: hidden;
+}
+
+body {
+    font-family: 'Roboto', sans-serif;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+a {
+  color: #1e88e5; /* Accent color for links */
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  background-color: #1e88e5; /* Primary button color */
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 15px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+button:hover {
+  background-color: #1565c0; /* Darker shade on hover */
+}
+
+input, textarea, select {
+  background-color: #1e1e1e;
+  color: #e0e0e0;
+  border: 1px solid #333; /* Subtle border */
+  border-radius: 4px;
+  padding: 10px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+input:focus, textarea:focus {
+  outline: none;
+  border-color: #1e88e5; /* Highlight on focus */
+}
+
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: #ffffff; /* Bright text for headings */
+  margin-bottom: 15px;
+}
+
+p {
+  margin-bottom: 15px;
+}
+
+.card, .navbar, .admin-dashboard, .main-container {
+  background-color: #1e1e1e !important;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5); /* Subtle shadow */
+  margin-bottom: 20px;
+}
+
+.navbar {
+  padding: 10px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.navbar a {
+  color: #e0e0e0;
+  margin-right: 15px;
+}
+
+.navbar a:hover {
+  color: #1e88e5;
+}
+
+.footer {
+  background-color: #1e1e1e;
+  color: #e0e0e0;
+  text-align: center;
+  padding: 20px;
+  margin-top: 20px;
+  border-top: 1px solid #333;
+}
+
+.main-layout {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #121212 !important;
+    color: #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+    font-family: 'monospace';
+}
+
+main {
+  flex: 1;
+  padding-top: 20px; /* Espacio adicional para el contenido */
+}
