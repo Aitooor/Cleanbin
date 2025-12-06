@@ -3,6 +3,8 @@ import { useRouter } from 'next/router';
 import { useNotification } from '../components/NotificationProvider';
 import { FaTrash, FaClipboard, FaEye } from 'react-icons/fa';
 import { FiLogOut } from 'react-icons/fi';
+import type { GetServerSideProps } from 'next';
+import { parse } from 'cookie';
 
 type DashboardProps = {
     onAction?: (id: string) => void;
@@ -357,3 +359,23 @@ const Dashboard: React.FC<DashboardProps> = ({ onAction }) => {
 };
 
 export default Dashboard;
+
+// Server-side protection for the dashboard route using cookies.
+export const getServerSideProps: GetServerSideProps = async (context) => {
+    const { req } = context;
+    const cookieHeader = req.headers.cookie || '';
+    const cookies = cookieHeader ? parse(cookieHeader) : {};
+
+    if (!cookies['auth-token']) {
+        return {
+            redirect: {
+                destination: '/login',
+                permanent: false,
+            },
+        };
+    }
+
+    return {
+        props: {},
+    };
+};
