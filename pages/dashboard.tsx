@@ -1,23 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { useNotification } from '../components/NotificationProvider';
+import { useNotification } from 'components/NotificationProvider';
 import { FaTrash, FaClipboard, FaEye } from 'react-icons/fa';
 import { FiLogOut } from 'react-icons/fi';
 import type { GetServerSideProps } from 'next';
 import { parse } from 'cookie';
 
-type DashboardProps = {
-    onAction?: (id: string) => void;
-};
+type DashboardProps = {};
 
-const Dashboard: React.FC<DashboardProps> = ({ onAction }) => {
+const Dashboard: React.FC<DashboardProps> = () => {
     const [pastes, setPastes] = useState<Paste[]>([]);
     const [searchTerm, setSearchTerm] = useState(''); // Estado para el término de búsqueda
     const [filteredPastes, setFilteredPastes] = useState<Paste[]>([]); // Estado para los pastes filtrados
-    const [notifications, setNotifications] = useState<{ id: number; paused: boolean; remainingTime: number; startTime: number }[]>([]);
     const [mounted, setMounted] = useState(false);
     const router = useRouter();
-    const timers = React.useRef<{ [key: number]: NodeJS.Timeout }>({});
     const { addNotification } = useNotification();
 
     useEffect(() => {
@@ -34,24 +30,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onAction }) => {
             }
         };
         fetchData();
-    }, []);
-
-    useEffect(() => {
-        const updateProgress = () => {
-            setNotifications((prev) =>
-                prev.map((n) =>
-                    n.paused
-                        ? n
-                        : {
-                              ...n,
-                              remainingTime: Math.max(0, n.remainingTime - 100),
-                          }
-                )
-            );
-        };
-
-        const interval = setInterval(updateProgress, 100);
-        return () => clearInterval(interval);
     }, []);
 
     useEffect(() => {
@@ -85,70 +63,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onAction }) => {
         }
     };
 
-    interface DuplicatePasteResponse {
-        id: string;
-        content: string;
-    }
-
-    const handleDuplicatePaste = async (id: string): Promise<void> => {
-        const response = await fetch(`/api/paste/${id}`);
-        const paste: Paste = await response.json();
-        const duplicateResponse = await fetch('/api/paste', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: paste.content }),
-        });
-        if (duplicateResponse.ok) {
-            const newPaste: DuplicatePasteResponse = await duplicateResponse.json();
-            setPastes([...pastes, { id: newPaste.id, name: paste.name, content: paste.content, createdAt: paste.createdAt, permanent: paste.permanent }]);
-        }
-    };
-
     const handleClonePaste = (id: string): void => {
         router.push(`/clone/${id}`);
-    };
-
-    const handlePreviewPaste = (id: string): void => {
-        router.push(`/${id}`);
-    };
-
-    const handleAction = (id: string) => {
-        if (onAction) {
-            onAction(id);
-        }
-    };
-
-    const handleMouseEnter = (id: number) => {
-        setNotifications((prev) =>
-            prev.map((n) =>
-                n.id === id
-                    ? {
-                          ...n,
-                          paused: true,
-                      }
-                    : n
-            )
-        );
-        clearTimeout(timers.current[id]);
-    };
-
-    const handleMouseLeave = (id: number) => {
-        setNotifications((prev) =>
-            prev.map((n) =>
-                n.id === id
-                    ? {
-                          ...n,
-                          paused: false,
-                          startTime: Date.now(),
-                      }
-                    : n
-            )
-        );
-
-        const notification = notifications.find((n) => n.id === id);
-        if (notification) {
-            timers.current[id] = setTimeout(() => {}, notification.remainingTime);
-        }
     };
 
     const handleCopyToClipboard = (text: string, customMessage?: string) => {
