@@ -152,6 +152,48 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     }}
                 />
             </div>
+            {/* Contadores de pastes */}
+            <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
+                <div
+                    style={{
+                        padding: '12px 18px',
+                        borderRadius: '8px',
+                        backgroundColor: '#202224',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                        minWidth: '140px',
+                        textAlign: 'center',
+                    }}
+                >
+                    <div style={{ fontSize: '13px', color: '#666' }}>Total</div>
+                    <div style={{ fontSize: '22px', fontWeight: 700 }}>{pastes.length}</div>
+                </div>
+                <div
+                    style={{
+                        padding: '12px 18px',
+                        borderRadius: '8px',
+                        backgroundColor: '#202224',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                        minWidth: '140px',
+                        textAlign: 'center',
+                    }}
+                >
+                    <div style={{ fontSize: '13px', color: '#666' }}>Permanent</div>
+                    <div style={{ fontSize: '22px', fontWeight: 700 }}>{pastes.filter((p) => p.permanent).length}</div>
+                </div>
+                <div
+                    style={{
+                        padding: '12px 18px',
+                        borderRadius: '8px',
+                        backgroundColor: '#202224',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                        minWidth: '140px',
+                        textAlign: 'center',
+                    }}
+                >
+                    <div style={{ fontSize: '13px', color: '#666' }}>Temporary</div>
+                    <div style={{ fontSize: '22px', fontWeight: 700 }}>{pastes.filter((p) => !p.permanent).length}</div>
+                </div>
+            </div>
             {/* Main content */}
             <div className="dashboard-content">
                 <div className="card">
