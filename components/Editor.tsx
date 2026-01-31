@@ -69,7 +69,7 @@ const Editor = () => {
                 }}
             />
             <p style={{ margin: 0, marginBottom: '10px', fontSize: '12px', color: '#666' }}>
-                Use <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;br&gt;</code> for line breaks and <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;hr&gt;</code> for a horizontal line.
+                In Name above: use <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;br&gt;</code> for line breaks and <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;hr&gt;</code> for a horizontal line.
             </p>
             <textarea
                 value={content}
