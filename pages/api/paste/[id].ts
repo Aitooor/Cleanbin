@@ -14,7 +14,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!paste) {
                 return res.status(404).json({ error: 'Paste not found' });
             }
-            return res.status(200).json({ content: paste.content });
+            const permanent = String(paste.permanent) === 'true';
+            return res.status(200).json({ content: paste.content, name: paste.name ?? '', permanent });
         } catch (error) {
             console.error('Error fetching paste:', error);
             return res.status(500).json({ error: 'Internal Server Error' });

@@ -12,8 +12,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const authToken = req.cookies['auth-token']; // Check the auth-token cookie
         const permanent = authToken === 'true'; // Determine if the paste is permanent
 
+        if (permanent && (typeof name !== 'string' || !name.trim())) {
+            return res.status(400).json({ message: 'Name is required for permanent pastes.' });
+        }
+
         const id = uuidv4();
-        await savePaste(id, content, name, permanent);
+        await savePaste(id, content, (name && typeof name === 'string' ? name : '') || '', permanent);
         return res.status(201).json({ id });
     } else if (req.method === 'GET') {
         const { id } = req.query;
@@ -27,7 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const permanent = paste.permanent === 'true' || paste.permanent === true;
-        return res.status(200).json({ id, content: paste.content, name: paste.name, permanent });
+        return res.status(200).json({ id, content: paste.content, name: paste.name ?? '', permanent });
     } else {
         res.setHeader('Allow', ['POST', 'GET']);
         return res.status(405).end(`Method ${req.method} Not Allowed`);

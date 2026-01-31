@@ -158,7 +158,7 @@ function getLangDisplayAndIcon(lang: string, content: string | undefined) {
 
 const PastePreview = () => {
     const [content, setContent] = useState('');
-    const [pasteName, setPasteName] = useState('');
+    const [name, setName] = useState('');
     const [permanent, setPermanent] = useState(false);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
@@ -170,7 +170,7 @@ const PastePreview = () => {
         // Only fetch if id is a string (not undefined or array)
         if (typeof id === 'string') {
             setLoading(true);
-            fetch(`/api/paste?id=${id}`)
+            fetch(`/api/paste/${id}`)
                 .then((response) => {
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
@@ -183,7 +183,7 @@ const PastePreview = () => {
                     } else {
                         setContent('Failed to load paste.');
                     }
-                    setPasteName(typeof data.name === 'string' ? data.name : '');
+                    setName(typeof data.name === 'string' ? data.name : '');
                     setPermanent(data.permanent === true || data.permanent === 'true');
                 })
                 .catch(() => {
@@ -363,7 +363,7 @@ const PastePreview = () => {
                 flexDirection: 'column',
             }}
         >
-            {permanent && (
+            {(permanent || name) && (
                 <div
                     style={{
                         position: 'fixed',
@@ -383,13 +383,13 @@ const PastePreview = () => {
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
                     }}
-                    title={pasteName || 'Sin nombre'}
+                    title={name || 'Sin nombre'}
                     dangerouslySetInnerHTML={{
-                        __html: pasteName
+                        __html: name
                             ? (() => {
                                   const HR_PLACEHOLDER = '\u0001HR\u0001';
                                   const hrHtml = '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
-                                  return pasteName
+                                  return name
                                       .replace(/<br\s*\/?>/gi, '\n')
                                       .replace(/<hr\s*\/?>/gi, HR_PLACEHOLDER)
                                       .replace(/&/g, '&amp;')

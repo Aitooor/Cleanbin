@@ -67,7 +67,6 @@ const Dashboard: React.FC<DashboardProps> = () => {
     };
 
     const openRenameModal = (paste: Paste) => {
-        if (!paste.permanent) return;
         setRenameTargetId(paste.id);
         setRenameValue(paste.name || '');
         setShowRenameModal(true);
@@ -315,8 +314,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                 <FaClipboard />
                                                 Clone
                                             </button>
-                                            {paste.permanent && (
-                                                <button
+                                            <button
                                                     className="button rename-button"
                                                     onClick={() => openRenameModal(paste)}
                                                     style={{
@@ -336,7 +334,6 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                 >
                                                     Rename
                                                 </button>
-                                            )}
                                             <button
                                                 className="button delete-button"
                                                 onClick={() => handleDeletePaste(paste.id)}
