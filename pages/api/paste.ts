@@ -26,7 +26,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(404).json({ message: 'Paste not found' });
         }
 
-        return res.status(200).json({ id, content: paste.content, name: paste.name });
+        const permanent = paste.permanent === 'true' || paste.permanent === true;
+        return res.status(200).json({ id, content: paste.content, name: paste.name, permanent });
     } else {
         res.setHeader('Allow', ['POST', 'GET']);
         return res.status(405).end(`Method ${req.method} Not Allowed`);

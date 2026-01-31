@@ -158,6 +158,8 @@ function getLangDisplayAndIcon(lang: string, content: string | undefined) {
 
 const PastePreview = () => {
     const [content, setContent] = useState('');
+    const [pasteName, setPasteName] = useState('');
+    const [permanent, setPermanent] = useState(false);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
     const { id } = router.query;
@@ -181,6 +183,8 @@ const PastePreview = () => {
                     } else {
                         setContent('Failed to load paste.');
                     }
+                    setPasteName(typeof data.name === 'string' ? data.name : '');
+                    setPermanent(data.permanent === true || data.permanent === 'true');
                 })
                 .catch(() => {
                     setContent('Failed to load paste.');
@@ -359,6 +363,31 @@ const PastePreview = () => {
                 flexDirection: 'column',
             }}
         >
+            {permanent && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        top: 12,
+                        right: 12,
+                        zIndex: 10,
+                        maxWidth: 220,
+                        padding: '8px 12px',
+                        background: 'rgba(40, 40, 40, 0.92)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: 8,
+                        fontSize: 13,
+                        color: '#b0b0b0',
+                        fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                    }}
+                    title={pasteName || 'Sin nombre'}
+                >
+                    {pasteName || '—'}
+                </div>
+            )}
             <div
                 style={{
                     width: '100vw',
