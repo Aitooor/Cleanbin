@@ -43,6 +43,11 @@ export type AppConfig = {
   cache: CacheConfig;
   // raw parsed cache-specific settings (from CACHE__* namespaced vars)
   cache_settings: AnyObj;
+  // compression settings
+  compression: {
+    type: 'brotli' | 'gzip' | 'none';
+    quality: number;
+  };
 };
 
 function toNumber(v: string | undefined, fallback = 3600) {
@@ -79,6 +84,13 @@ export const config: AppConfig = {
     ttl: toNumber(process.env.CACHE_TTL || String(parseNamespaced('CACHE').ttl), 3600),
   },
   cache_settings: parseNamespaced('CACHE'),
+  compression: {
+    type: (process.env.COMPRESSION_TYPE || (parseNamespaced('COMPRESSION').type as string) || 'brotli') as
+      | 'brotli'
+      | 'gzip'
+      | 'none',
+    quality: toNumber(process.env.COMPRESSION_QUALITY || String(parseNamespaced('COMPRESSION').quality), 6),
+  },
 };
 
 export default config;

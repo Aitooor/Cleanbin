@@ -1,5 +1,29 @@
 import config from './config';
 
+import { promisify } from 'util';
+import zlib from 'zlib';
+
+const brotliCompress = promisify(zlib.brotliCompress);
+const brotliDecompress = promisify(zlib.brotliDecompress);
+
+async function compressBuffer(buf: Buffer): Promise<Buffer> {
+  if (config.compression.type === 'none') return buf;
+  if (config.compression.type === 'gzip') {
+    return await promisify(zlib.gzip)(buf);
+  }
+  // default brotli
+  const opts = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: config.compression.quality } };
+  return await brotliCompress(buf, opts);
+}
+
+async function decompressBuffer(buf: Buffer): Promise<Buffer> {
+  if (config.compression.type === 'none') return buf;
+  if (config.compression.type === 'gzip') {
+    return await promisify(zlib.unzip)(buf);
+  }
+  return await brotliDecompress(buf);
+}
+
 // Keep server-only requires lazy to avoid bundling drivers into client code
 let fs: typeof import('fs/promises') | undefined;
 let pathModule: typeof import('path') | undefined;
@@ -205,7 +229,11 @@ class JsonDatabase implements DatabaseBackend {
       createdAt: new Date().toISOString(),
     };
     await fs!.mkdir(this.jsonPath, { recursive: true });
-    await fs!.writeFile(filePath, JSON.stringify(data, null, 2));
+    // compress and store binary
+    const payloadBuf = Buffer.from(JSON.stringify(data));
+    const compressed = await compressBuffer(payloadBuf);
+    await fs!.writeFile(filePath, compressed);
+    // cache holds decompressed object for fast reads
     await cache.set(`paste_${id}`, data);
     return id;
   }
@@ -216,8 +244,9 @@ class JsonDatabase implements DatabaseBackend {
     if (cached) return cached as Paste;
     const filePath = this.getFilePath(id);
     try {
-      const content = await fs!.readFile(filePath, 'utf-8');
-      const data = JSON.parse(content) as Paste;
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      const data = JSON.parse(decompressed.toString('utf-8')) as Paste;
       await cache.set(cacheKey, data);
       return data;
     } catch (err: any) {
@@ -237,10 +266,13 @@ class JsonDatabase implements DatabaseBackend {
     this.ensureServer();
     const filePath = this.getFilePath(id);
     try {
-      const content = await fs!.readFile(filePath, 'utf-8');
-      const data = JSON.parse(content) as Paste;
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      const data = JSON.parse(decompressed.toString('utf-8')) as Paste;
       data.name = newName;
-      await fs!.writeFile(filePath, JSON.stringify(data, null, 2));
+      const newBuf = Buffer.from(JSON.stringify(data));
+      const compressed = await compressBuffer(newBuf);
+      await fs!.writeFile(filePath, compressed);
       await cache.set(`paste_${id}`, data);
       return data;
     } catch (err: any) {
@@ -255,10 +287,10 @@ class JsonDatabase implements DatabaseBackend {
       throw e;
     });
     for (const file of files) {
-      if (!file.endsWith('.json')) continue;
       const filePath = pathModule!.join(this.jsonPath, file);
-      const content = await fs!.readFile(filePath, 'utf-8');
-      const paste = JSON.parse(content) as Paste;
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      const paste = JSON.parse(decompressed.toString('utf-8')) as Paste;
       if (paste.expiresAt && new Date() > new Date(paste.expiresAt)) {
         await fs!.unlink(filePath);
         await cache.del(`paste_${paste.id}`);
@@ -273,10 +305,10 @@ class JsonDatabase implements DatabaseBackend {
     });
     const out: Paste[] = [];
     for (const file of files) {
-      if (!file.endsWith('.json')) continue;
       const filePath = pathModule!.join(this.jsonPath, file);
-      const content = await fs!.readFile(filePath, 'utf-8');
-      out.push(JSON.parse(content));
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      out.push(JSON.parse(decompressed.toString('utf-8')));
     }
     return out;
   }
@@ -318,16 +350,20 @@ function createDatabase(): DatabaseBackend {
       db.exec(`CREATE TABLE IF NOT EXISTS pastes (id TEXT PRIMARY KEY, payload TEXT)`);
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
-          const payload = JSON.stringify({ id, content, name, permanent, createdAt: new Date().toISOString() });
+          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
+          const b64 = compressed.toString('base64');
           const stmt = db.prepare('INSERT OR REPLACE INTO pastes (id,payload) VALUES (?,?)');
-          stmt.run(id, payload);
-          await cache.set(`paste_${id}`, JSON.parse(payload));
+          stmt.run(id, b64);
+          await cache.set(`paste_${id}`, obj);
           return id;
         },
         getPaste: async (id: string) => {
           const row = db.prepare('SELECT payload FROM pastes WHERE id = ?').get(id);
           if (!row) return null;
-          const parsed = JSON.parse(row.payload);
+          const buf = Buffer.from(row.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
           await cache.set(`paste_${id}`, parsed);
           return parsed;
         },
@@ -338,18 +374,27 @@ function createDatabase(): DatabaseBackend {
         updatePasteName: async (id: string, newName: string) => {
           const row = db.prepare('SELECT payload FROM pastes WHERE id = ?').get(id);
           if (!row) return null;
-          const parsed = JSON.parse(row.payload);
+          const buf = Buffer.from(row.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
           parsed.name = newName;
-          db.prepare('UPDATE pastes SET payload = ? WHERE id = ?').run(JSON.stringify(parsed), id);
+          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
+          db.prepare('UPDATE pastes SET payload = ? WHERE id = ?').run(newCompressed.toString('base64'), id);
           await cache.set(`paste_${id}`, parsed);
           return parsed;
         },
         deleteExpiredPastes: async () => {
-          // No-op by default; user can implement TTL handling in payload
+          // No-op by default; TTL handling can be implemented on application level
         },
         getAllPastes: async () => {
           const rows = db.prepare('SELECT payload FROM pastes').all();
-          return rows.map((r: any) => JSON.parse(r.payload));
+          return await Promise.all(
+            rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
         },
       };
     } catch (err) {
@@ -369,17 +414,22 @@ function createDatabase(): DatabaseBackend {
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
           const coll = await collPromise;
-          const doc = { id, content, name, permanent, createdAt: new Date().toISOString() };
-          await coll.updateOne({ id }, { $set: doc }, { upsert: true });
-          await cache.set(`paste_${id}`, doc);
+          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
+          const b64 = compressed.toString('base64');
+          await coll.updateOne({ id }, { $set: { payload: b64 } }, { upsert: true });
+          await cache.set(`paste_${id}`, obj);
           return id;
         },
         getPaste: async (id: string) => {
           const coll = await collPromise;
           const doc = await coll.findOne({ id });
-          if (!doc) return null;
-          await cache.set(`paste_${id}`, doc);
-          return doc;
+          if (!doc || !doc.payload) return null;
+          const buf = Buffer.from(doc.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
         },
         deletePaste: async (id: string) => {
           const coll = await collPromise;
@@ -388,17 +438,31 @@ function createDatabase(): DatabaseBackend {
         },
         updatePasteName: async (id: string, newName: string) => {
           const coll = await collPromise;
-          const res = await coll.findOneAndUpdate({ id }, { $set: { name: newName } }, { returnDocument: 'after' });
-          if (!res.value) return null;
-          await cache.set(`paste_${id}`, res.value);
-          return res.value;
+          const doc = await coll.findOne({ id });
+          if (!doc || !doc.payload) return null;
+          const buf = Buffer.from(doc.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          parsed.name = newName;
+          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
+          await coll.updateOne({ id }, { $set: { payload: newCompressed.toString('base64') } });
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
         },
         deleteExpiredPastes: async () => {
-          // implement TTL via expiresAt if present
+          // TTL handling if needed
         },
         getAllPastes: async () => {
           const coll = await collPromise;
-          return await coll.find().toArray();
+          const docs = await coll.find().toArray();
+          return await Promise.all(
+            docs.map(async (d: any) => {
+              if (!d.payload) return null;
+              const buf = Buffer.from(d.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
         },
       };
     } catch (err) {
@@ -427,15 +491,19 @@ function createDatabase(): DatabaseBackend {
       });
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
-          const payload = JSON.stringify({ id, content, name, permanent, createdAt: new Date().toISOString() });
-          await knex('pastes').insert({ id, payload }).onConflict('id').merge();
-          await cache.set(`paste_${id}`, JSON.parse(payload));
+          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
+          const b64 = compressed.toString('base64');
+          await knex('pastes').insert({ id, payload: b64 }).onConflict('id').merge();
+          await cache.set(`paste_${id}`, obj);
           return id;
         },
         getPaste: async (id: string) => {
           const row = await knex('pastes').where({ id }).first();
           if (!row) return null;
-          const parsed = JSON.parse(row.payload);
+          const buf = Buffer.from(row.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
           await cache.set(`paste_${id}`, parsed);
           return parsed;
         },
@@ -446,16 +514,25 @@ function createDatabase(): DatabaseBackend {
         updatePasteName: async (id: string, newName: string) => {
           const row = await knex('pastes').where({ id }).first();
           if (!row) return null;
-          const parsed = JSON.parse(row.payload);
+          const buf = Buffer.from(row.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
           parsed.name = newName;
-          await knex('pastes').where({ id }).update({ payload: JSON.stringify(parsed) });
+          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
+          await knex('pastes').where({ id }).update({ payload: newCompressed.toString('base64') });
           await cache.set(`paste_${id}`, parsed);
           return parsed;
         },
         deleteExpiredPastes: async () => {},
         getAllPastes: async () => {
           const rows = await knex('pastes').select('payload');
-          return rows.map((r: any) => JSON.parse(r.payload));
+          return await Promise.all(
+            rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
         },
       };
     } catch (err) {
@@ -470,15 +547,18 @@ function createDatabase(): DatabaseBackend {
       const client = new cassandra.Client({ contactPoints: ['127.0.0.1'], localDataCenter: 'datacenter1', keyspace: process.env.CASSANDRA_KEYSPACE || 'pastes' });
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
-          const payload = JSON.stringify({ id, content, name, permanent, createdAt: new Date().toISOString() });
-          await client.execute('INSERT INTO pastes (id,payload) VALUES (?,?)', [id, payload], { prepare: true });
-          await cache.set(`paste_${id}`, JSON.parse(payload));
+          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
+          await client.execute('INSERT INTO pastes (id,payload) VALUES (?,?)', [id, compressed.toString('base64')], { prepare: true });
+          await cache.set(`paste_${id}`, obj);
           return id;
         },
         getPaste: async (id: string) => {
           const res = await client.execute('SELECT payload FROM pastes WHERE id = ?', [id], { prepare: true });
           if (res.rowLength === 0) return null;
-          const parsed = JSON.parse(res.rows[0].payload);
+          const buf = Buffer.from(res.rows[0].payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
           await cache.set(`paste_${id}`, parsed);
           return parsed;
         },
@@ -489,16 +569,25 @@ function createDatabase(): DatabaseBackend {
         updatePasteName: async (id: string, newName: string) => {
           const res = await client.execute('SELECT payload FROM pastes WHERE id = ?', [id], { prepare: true });
           if (res.rowLength === 0) return null;
-          const parsed = JSON.parse(res.rows[0].payload);
+          const buf = Buffer.from(res.rows[0].payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
           parsed.name = newName;
-          await client.execute('INSERT INTO pastes (id,payload) VALUES (?,?)', [id, JSON.stringify(parsed)], { prepare: true });
+          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
+          await client.execute('INSERT INTO pastes (id,payload) VALUES (?,?)', [id, newCompressed.toString('base64')], { prepare: true });
           await cache.set(`paste_${id}`, parsed);
           return parsed;
         },
         deleteExpiredPastes: async () => {},
         getAllPastes: async () => {
           const res = await client.execute('SELECT payload FROM pastes');
-          return res.rows.map((r: any) => JSON.parse(r.payload));
+          return await Promise.all(
+            res.rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
         },
       };
     } catch (err) {
