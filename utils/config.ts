@@ -41,6 +41,8 @@ export type CacheConfig = {
 export type AppConfig = {
   database: DatabaseConfig;
   cache: CacheConfig;
+  // raw parsed cache-specific settings (from CACHE__* namespaced vars)
+  cache_settings: AnyObj;
 };
 
 function toNumber(v: string | undefined, fallback = 3600) {
@@ -76,6 +78,7 @@ export const config: AppConfig = {
       'In-memory',
     ttl: toNumber(process.env.CACHE_TTL || String(parseNamespaced('CACHE').ttl), 3600),
   },
+  cache_settings: parseNamespaced('CACHE'),
 };
 
 export default config;

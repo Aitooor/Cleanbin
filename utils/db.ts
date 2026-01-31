@@ -97,6 +97,76 @@ function createCache(): CacheBackend {
       throw new Error('Cassandra cache selected but "cassandra-driver" is not installed. npm i cassandra-driver');
     }
   }
+  // LevelDB (embedded) - stores JSON {value,expiresAt}
+  if (t === 'leveldb' || t === 'level' || t === 'level-db') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const level = require('level');
+      const levelPath = config.cache_settings.leveldb_path || './data/cache/';
+      const db = level(levelPath, { valueEncoding: 'utf8' });
+      return {
+        get: async (k: string) => {
+          try {
+            const raw = await db.get(k);
+            const parsed = JSON.parse(raw);
+            if (parsed.expiresAt && Date.now() > parsed.expiresAt) {
+              await db.del(k);
+              return null;
+            }
+            return parsed.value;
+          } catch (e: any) {
+            if (e.notFound) return null;
+            throw e;
+          }
+        },
+        set: async (k: string, v: any, ttlMs?: number) => {
+          const expiresAt = ttlMs ? Date.now() + ttlMs : null;
+          await db.put(k, JSON.stringify({ value: v, expiresAt }));
+        },
+        del: async (k: string) => {
+          try {
+            await db.del(k);
+          } catch (e: any) {
+            if (e.notFound) return;
+            throw e;
+          }
+        },
+      };
+    } catch (err) {
+      throw new Error('LevelDB cache selected but "level" is not installed. npm i level');
+    }
+  }
+  // SQLite-as-cache (embedded) using better-sqlite3
+  if (t === 'sqlite' || t === 'sqlite-cache' || t === 'sqlite3-cache') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const Database = require('better-sqlite3');
+      const sqlitePath = config.cache_settings.sqlite_db_path || process.env.CACHE__SQLITE_DB_PATH || './data/cache.db';
+      const db = new Database(sqlitePath);
+      db.exec('CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT, expiresAt INTEGER)');
+      return {
+        get: async (k: string) => {
+          const row = db.prepare('SELECT value, expiresAt FROM cache WHERE key = ?').get(k);
+          if (!row) return null;
+          if (row.expiresAt && Date.now() > row.expiresAt) {
+            db.prepare('DELETE FROM cache WHERE key = ?').run(k);
+            return null;
+          }
+          return JSON.parse(row.value);
+        },
+        set: async (k: string, v: any, ttlMs?: number) => {
+          const expiresAt = ttlMs ? Date.now() + ttlMs : null;
+          const str = JSON.stringify(v);
+          db.prepare('INSERT OR REPLACE INTO cache (key, value, expiresAt) VALUES (?,?,?)').run(k, str, expiresAt);
+        },
+        del: async (k: string) => {
+          db.prepare('DELETE FROM cache WHERE key = ?').run(k);
+        },
+      };
+    } catch (err) {
+      throw new Error('SQLite cache selected but "better-sqlite3" is not installed. npm i better-sqlite3');
+    }
+  }
   // Default
   return new InMemoryCache(ttlMs);
 }
@@ -214,22 +284,22 @@ class JsonDatabase implements DatabaseBackend {
 
 // Placeholders for SQL/NoSQL drivers. They lazy-require driver packages and provide minimal implementations.
 class NotImplementedDB implements DatabaseBackend {
-  async savePaste() {
+  async savePaste(id: string, content: string, name: string, permanent: boolean): Promise<string> {
     throw new Error('This database driver is not implemented in this environment. Install and implement the driver.');
   }
-  async getPaste() {
+  async getPaste(id: string): Promise<Paste | null> {
     throw new Error('This database driver is not implemented in this environment. Install and implement the driver.');
   }
-  async deletePaste() {
+  async deletePaste(id: string): Promise<void> {
     throw new Error('This database driver is not implemented in this environment. Install and implement the driver.');
   }
-  async updatePasteName() {
+  async updatePasteName(id: string, newName: string): Promise<Paste | null> {
     throw new Error('This database driver is not implemented in this environment. Install and implement the driver.');
   }
-  async deleteExpiredPastes() {
+  async deleteExpiredPastes(): Promise<void> {
     // best-effort noop
   }
-  async getAllPastes() {
+  async getAllPastes(): Promise<Paste[]> {
     return [];
   }
 }
@@ -347,9 +417,9 @@ function createDatabase(): DatabaseBackend {
         connection: config.database.postgres_uri || config.database.mariadb_uri,
       });
       // ensure table
-      knex.schema.hasTable('pastes').then(exists => {
+      knex.schema.hasTable('pastes').then((exists: boolean) => {
         if (!exists) {
-          return knex.schema.createTable('pastes', t => {
+          return knex.schema.createTable('pastes', (t: any) => {
             t.string('id').primary();
             t.text('payload');
           });
