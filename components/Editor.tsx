@@ -54,21 +54,26 @@ const Editor = () => {
             }}
         >
             {isLoggedIn && (
-                <input
-                    type="text"
-                    placeholder="Enter name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    style={{
-                        marginBottom: '10px',
-                        padding: '10px',
-                        borderRadius: '4px',
-                        border: '1px solid #333',
-                        backgroundColor: '#1e1e1e',
-                        color: '#e0e0e0',
-                        fontFamily: 'monospace',
-                    }}
-                />
+                <>
+                    <input
+                        type="text"
+                        placeholder="Enter name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        style={{
+                            marginBottom: '4px',
+                            padding: '10px',
+                            borderRadius: '4px',
+                            border: '1px solid #333',
+                            backgroundColor: '#1e1e1e',
+                            color: '#e0e0e0',
+                            fontFamily: 'monospace',
+                        }}
+                    />
+                    <p style={{ margin: 0, marginBottom: '10px', fontSize: '12px', color: '#666' }}>
+                        Use <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;br&gt;</code> for line breaks and <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;hr&gt;</code> for a horizontal line.
+                    </p>
+                </>
             )}
             <textarea
                 value={content}
