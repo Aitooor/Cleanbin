@@ -100,6 +100,26 @@ export async function deletePaste(id: string): Promise<void> {
   cache.delete(getCacheKey(id));
 }
 
+export async function updatePasteName(id: string, newName: string): Promise<Paste | null> {
+  if (!fs || !path) throw new Error('This function can only be used on the server side.');
+
+  const filePath: string = path.join(JSON_DB_PATH, `${id}.json`);
+  try {
+    const fileContent: string = await fs.readFile(filePath, 'utf-8');
+    const data: Paste = JSON.parse(fileContent);
+    data.name = newName;
+    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+    // Update cache
+    cache.set(getCacheKey(id), { data, timestamp: Date.now() });
+    return data;
+  } catch (error: any) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function deleteExpiredPastes(): Promise<void> {
   if (!fs || !path) throw new Error('This function can only be used on the server side.');
 
