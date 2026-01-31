@@ -124,3 +124,53 @@ main {
   flex: 1;
   padding-top: 20px; /* Espacio adicional para el contenido */
 }
+
+/* Editor name hint: mobile-first (base = mobile, min-width = larger screens) */
+.editor-name-hint {
+  margin: 0;
+  margin-bottom: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #666;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  /* allow breaking at more places on very small screens so the hint never overflows */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.editor-name-hint code {
+  background: #2a2a2a;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+@media (min-width: 37.5rem) {
+  .editor-name-hint {
+    margin-bottom: 10px;
+    font-size: 12px;
+  }
+  /* on larger screens keep code inline but allow normal wrapping */
+  .editor-name-hint code { display: inline; }
+}
+
+/* Editor buttons: mobile-first.
+   On small screens keep buttons in the flow (below the textarea) so they don't overlap content.
+   On larger screens position them top-right. */
+.editor-buttons {
+  display: flex;
+  gap: 10px;
+  background-color: #1e1e1e;
+  padding: 5px;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (min-width: 37.5rem) {
+  .editor-buttons {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+  }
+}

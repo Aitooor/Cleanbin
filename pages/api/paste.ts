@@ -4,13 +4,14 @@ import { savePaste, getPaste } from '../../utils/db';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (req.method === 'POST') {
-        const { content, name } = req.body;
+        const { content, name, permanent: bodyPermanent } = req.body;
         if (!content) {
             return res.status(400).json({ message: 'Content is required' });
         }
 
-        const authToken = req.cookies['auth-token']; // Check the auth-token cookie
-        const permanent = authToken === 'true'; // Determine if the paste is permanent
+        const authToken = req.cookies['auth-token'];
+        const isLoggedIn = authToken === 'true';
+        const permanent = isLoggedIn && (bodyPermanent !== false && bodyPermanent !== 'false');
 
         if (permanent && (typeof name !== 'string' || !name.trim())) {
             return res.status(400).json({ message: 'Name is required for permanent pastes.' });
