@@ -380,13 +380,29 @@ const PastePreview = () => {
                         fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
                         boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
                         overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
                     }}
                     title={pasteName || 'Sin nombre'}
-                >
-                    {pasteName || '—'}
-                </div>
+                    dangerouslySetInnerHTML={{
+                        __html: pasteName
+                            ? (() => {
+                                  const HR_PLACEHOLDER = '\u0001HR\u0001';
+                                  const hrHtml = '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
+                                  return pasteName
+                                      .replace(/<br\s*\/?>/gi, '\n')
+                                      .replace(/<hr\s*\/?>/gi, HR_PLACEHOLDER)
+                                      .replace(/&/g, '&amp;')
+                                      .replace(/</g, '&lt;')
+                                      .replace(/>/g, '&gt;')
+                                      .replace(/"/g, '&quot;')
+                                      .replace(/\n/g, '<br />')
+                                      .split(HR_PLACEHOLDER)
+                                      .join(hrHtml);
+                              })()
+                            : '—',
+                    }}
+                />
             )}
             <div
                 style={{
