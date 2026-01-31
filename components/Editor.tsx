@@ -7,7 +7,8 @@ const Editor = () => {
     const [content, setContent] = useState('');
     const [name, setName] = useState('');
     const [isLoggedIn, setIsLoggedIn] = useState(false);
-    const [isPermanent, setIsPermanent] = useState(true);
+    // default Temp instead of Permanent when logged in
+    const [isPermanent, setIsPermanent] = useState(false);
     const { addNotification } = useNotification();
 
     useEffect(() => {
