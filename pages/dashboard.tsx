@@ -67,7 +67,6 @@ const Dashboard: React.FC<DashboardProps> = () => {
     };
 
     const openRenameModal = (paste: Paste) => {
-        if (!paste.permanent) return;
         setRenameTargetId(paste.id);
         setRenameValue(paste.name || '');
         setShowRenameModal(true);
@@ -315,8 +314,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                 <FaClipboard />
                                                 Clone
                                             </button>
-                                            {paste.permanent && (
-                                                <button
+                                            <button
                                                     className="button rename-button"
                                                     onClick={() => openRenameModal(paste)}
                                                     style={{
@@ -334,9 +332,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                     onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#d97706')}
                                                     onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#fa8c16')}
                                                 >
-                                                    Renombrar
+                                                    Rename
                                                 </button>
-                                            )}
                                             <button
                                                 className="button delete-button"
                                                 onClick={() => handleDeletePaste(paste.id)}
@@ -390,7 +387,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             color: '#e6e6e6',
                         }}
                     >
-                        <h3 style={{ margin: 0, marginBottom: '10px' }}>Renombrar paste</h3>
+                        <h3 style={{ margin: 0, marginBottom: '6px' }}>Rename paste</h3>
+                        <p style={{ margin: 0, marginBottom: '10px', fontSize: '13px', color: '#999' }}>
+                            Use <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;br&gt;</code> for line breaks and <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;hr&gt;</code> for a horizontal line.
+                        </p>
                         <input
                             autoFocus
                             value={renameValue}
@@ -421,7 +421,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                     cursor: 'pointer',
                                 }}
                             >
-                                Cancelar
+                                Cancel
                             </button>
                             <button
                                 onClick={handleSaveRename}
@@ -434,7 +434,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                     cursor: 'pointer',
                                 }}
                             >
-                                Guardar
+                                Save
                             </button>
                         </div>
                     </div>

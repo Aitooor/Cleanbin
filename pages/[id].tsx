@@ -158,6 +158,8 @@ function getLangDisplayAndIcon(lang: string, content: string | undefined) {
 
 const PastePreview = () => {
     const [content, setContent] = useState('');
+    const [name, setName] = useState('');
+    const [permanent, setPermanent] = useState(false);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
     const { id } = router.query;
@@ -168,7 +170,7 @@ const PastePreview = () => {
         // Only fetch if id is a string (not undefined or array)
         if (typeof id === 'string') {
             setLoading(true);
-            fetch(`/api/paste?id=${id}`)
+            fetch(`/api/paste/${id}`)
                 .then((response) => {
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
@@ -181,6 +183,8 @@ const PastePreview = () => {
                     } else {
                         setContent('Failed to load paste.');
                     }
+                    setName(typeof data.name === 'string' ? data.name : '');
+                    setPermanent(data.permanent === true || data.permanent === 'true');
                 })
                 .catch(() => {
                     setContent('Failed to load paste.');
@@ -359,6 +363,47 @@ const PastePreview = () => {
                 flexDirection: 'column',
             }}
         >
+            {(permanent || name) && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        top: 12,
+                        right: 12,
+                        zIndex: 10,
+                        maxWidth: 220,
+                        padding: '8px 12px',
+                        background: 'rgba(40, 40, 40, 0.92)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: 8,
+                        fontSize: 13,
+                        color: '#b0b0b0',
+                        fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                        overflow: 'hidden',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                    }}
+                    title={name || 'Sin nombre'}
+                    dangerouslySetInnerHTML={{
+                        __html: name
+                            ? (() => {
+                                  const HR_PLACEHOLDER = '\u0001HR\u0001';
+                                  const hrHtml = '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
+                                  return name
+                                      .replace(/<br\s*\/?>/gi, '\n')
+                                      .replace(/<hr\s*\/?>/gi, HR_PLACEHOLDER)
+                                      .replace(/&/g, '&amp;')
+                                      .replace(/</g, '&lt;')
+                                      .replace(/>/g, '&gt;')
+                                      .replace(/"/g, '&quot;')
+                                      .replace(/\n/g, '<br />')
+                                      .split(HR_PLACEHOLDER)
+                                      .join(hrHtml);
+                              })()
+                            : '—',
+                    }}
+                />
+            )}
             <div
                 style={{
                     width: '100vw',
