@@ -127,6 +127,14 @@ function createCache(): CacheBackend {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const level = require('level');
       const levelPath = config.cache_settings.leveldb_path || './data/cache/';
+      try {
+        // ensure directory exists for leveldb
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fsSync = require('fs');
+        fsSync.mkdirSync(levelPath, { recursive: true });
+      } catch (err) {
+        // best-effort
+      }
       const db = level(levelPath, { valueEncoding: 'utf8' });
       return {
         get: async (k: string) => {
@@ -166,6 +174,16 @@ function createCache(): CacheBackend {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const Database = require('better-sqlite3');
       const sqlitePath = config.cache_settings.sqlite_db_path || process.env.CACHE__SQLITE_DB_PATH || './data/cache.db';
+      try {
+        // ensure parent directory exists
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fsSync = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const pathSync = require('path');
+        fsSync.mkdirSync(pathSync.dirname(sqlitePath), { recursive: true });
+      } catch (err) {
+        // best-effort
+      }
       const db = new Database(sqlitePath);
       db.exec('CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT, expiresAt INTEGER)');
       return {
@@ -345,7 +363,18 @@ function createDatabase(): DatabaseBackend {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const Database = require('better-sqlite3');
-      const db = new Database(config.database.sqlite_db_path || './data/pastes.db');
+      const sqlitePath = config.database.sqlite_db_path || './data/pastes.db';
+      try {
+        // ensure parent dir for sqlite DB exists
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fsSync = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const pathSync = require('path');
+        fsSync.mkdirSync(pathSync.dirname(sqlitePath), { recursive: true });
+      } catch (err) {
+        // best-effort
+      }
+      const db = new Database(sqlitePath);
       // Minimal implementation that uses a simple table "pastes" (id TEXT PRIMARY KEY, payload TEXT)
       db.exec(`CREATE TABLE IF NOT EXISTS pastes (id TEXT PRIMARY KEY, payload TEXT)`);
       return {
