@@ -1,163 +1,655 @@
-let fs: typeof import('fs/promises');
-let path: typeof import('path');
+import config from './config';
 
+import { promisify } from 'util';
+import zlib from 'zlib';
+
+const brotliCompress = promisify(zlib.brotliCompress);
+const brotliDecompress = promisify(zlib.brotliDecompress);
+
+async function compressBuffer(buf: Buffer): Promise<Buffer> {
+  if (config.compression.type === 'none') return buf;
+  if (config.compression.type === 'gzip') {
+    return await promisify(zlib.gzip)(buf);
+  }
+  // default brotli
+  const opts = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: config.compression.quality } };
+  return await brotliCompress(buf, opts);
+}
+
+async function decompressBuffer(buf: Buffer): Promise<Buffer> {
+  if (config.compression.type === 'none') return buf;
+  if (config.compression.type === 'gzip') {
+    return await promisify(zlib.unzip)(buf);
+  }
+  return await brotliDecompress(buf);
+}
+
+// Keep server-only requires lazy to avoid bundling drivers into client code
+let fs: typeof import('fs/promises') | undefined;
+let pathModule: typeof import('path') | undefined;
 if (typeof window === 'undefined') {
-  // Dynamically import Node.js modules only on the server side
   fs = require('fs/promises');
-  path = require('path');
+  pathModule = require('path');
 }
 
-const JSON_DB_PATH = process.env.JSON_DB_PATH || './data/pastes/';
-const CACHE_TTL = parseInt(process.env.CACHE_TTL || '3600', 10) * 1000; // Convert to milliseconds
-
-// In-memory cache
-const cache = new Map();
-
-interface CacheEntry {
-  data: Paste;
-  timestamp: number;
-}
-
-interface Paste {
+type Paste = {
   id: string;
   content: string;
-  name: string;
-  permanent: boolean; // Nuevo campo para distinguir entre permanente y temporal
+  name?: string;
+  permanent?: boolean | string;
   createdAt: string;
-  expiresAt?: string; // Fecha de expiración para pastes temporales
+  expiresAt?: string;
+};
+
+// Cache abstraction (minimal): in-memory, Redis and Cassandra placeholders
+interface CacheBackend {
+  get(key: string): Promise<any | null>;
+  set(key: string, value: any, ttlMs?: number): Promise<void>;
+  del(key: string): Promise<void>;
 }
 
-function getCacheKey(id: string): string {
-  return `paste_${id}`;
+class InMemoryCache implements CacheBackend {
+  private map = new Map<string, { value: any; expiresAt: number }>();
+  constructor(private ttlMs: number) {}
+  async get(key: string) {
+    const e = this.map.get(key);
+    if (!e) return null;
+    if (Date.now() > e.expiresAt) {
+      this.map.delete(key);
+      return null;
+    }
+    return e.value;
+  }
+  async set(key: string, value: any, ttlMs?: number) {
+    const ttl = ttlMs ?? this.ttlMs;
+    this.map.set(key, { value, expiresAt: Date.now() + ttl });
+  }
+  async del(key: string) {
+    this.map.delete(key);
+  }
 }
 
-function isCacheValid(timestamp: number): boolean {
-  return Date.now() - timestamp < CACHE_TTL;
+function createCache(): CacheBackend {
+  const ttlMs = (config.cache.ttl || 3600) * 1000;
+  const t = config.cache.type?.toLowerCase() || 'in-memory';
+  if (t === 'in-memory' || t === 'in_memory') {
+    return new InMemoryCache(ttlMs);
+  }
+  // Redis
+  if (t === 'redis') {
+    try {
+      // Prefer ioredis if available
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const IORedis = require('ioredis');
+      const client = new IORedis(process.env.REDIS_URL || process.env.REDIS_URI || undefined);
+      return {
+        get: async (k: string) => {
+          const v = await client.get(k);
+          return v ? JSON.parse(v) : null;
+        },
+        set: async (k: string, v: any, ttlMs?: number) => {
+          const str = JSON.stringify(v);
+          if (ttlMs) await client.set(k, str, 'PX', ttlMs);
+          else await client.set(k, str);
+        },
+        del: async (k: string) => client.del(k),
+      };
+    } catch (err) {
+      throw new Error('Redis cache selected but "ioredis" is not installed. npm i ioredis');
+    }
+  }
+  // Cassandra as cache (advanced) - placeholder that attempts to use cassandra-driver
+  if (t === 'cassandra') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const cassandra = require('cassandra-driver');
+      const client = new cassandra.Client({ contactPoints: ['127.0.0.1'], localDataCenter: 'datacenter1', keyspace: process.env.CASSANDRA_KEYSPACE || 'pastes' });
+      return {
+        get: async (k: string) => {
+          const res = await client.execute('SELECT value FROM cache WHERE key = ?', [k], { prepare: true });
+          if (res.rowLength === 0) return null;
+          return JSON.parse(res.rows[0].value);
+        },
+        set: async (k: string, v: any) => {
+          await client.execute('INSERT INTO cache (key,value) VALUES (?,?)', [k, JSON.stringify(v)], { prepare: true });
+        },
+        del: async (k: string) => {
+          await client.execute('DELETE FROM cache WHERE key = ?', [k], { prepare: true });
+        },
+      };
+    } catch (err) {
+      throw new Error('Cassandra cache selected but "cassandra-driver" is not installed. npm i cassandra-driver');
+    }
+  }
+  // LevelDB (embedded) - stores JSON {value,expiresAt}
+  if (t === 'leveldb' || t === 'level' || t === 'level-db') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const level = require('level');
+      const levelPath = config.cache_settings.leveldb_path || './data/cache/';
+      try {
+        // ensure directory exists for leveldb
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fsSync = require('fs');
+        fsSync.mkdirSync(levelPath, { recursive: true });
+      } catch (err) {
+        // best-effort
+      }
+      const db = level(levelPath, { valueEncoding: 'utf8' });
+      return {
+        get: async (k: string) => {
+          try {
+            const raw = await db.get(k);
+            const parsed = JSON.parse(raw);
+            if (parsed.expiresAt && Date.now() > parsed.expiresAt) {
+              await db.del(k);
+              return null;
+            }
+            return parsed.value;
+          } catch (e: any) {
+            if (e.notFound) return null;
+            throw e;
+          }
+        },
+        set: async (k: string, v: any, ttlMs?: number) => {
+          const expiresAt = ttlMs ? Date.now() + ttlMs : null;
+          await db.put(k, JSON.stringify({ value: v, expiresAt }));
+        },
+        del: async (k: string) => {
+          try {
+            await db.del(k);
+          } catch (e: any) {
+            if (e.notFound) return;
+            throw e;
+          }
+        },
+      };
+    } catch (err) {
+      throw new Error('LevelDB cache selected but "level" is not installed. npm i level');
+    }
+  }
+  // SQLite-as-cache (embedded) using better-sqlite3
+  if (t === 'sqlite' || t === 'sqlite-cache' || t === 'sqlite3-cache') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const Database = require('better-sqlite3');
+      const sqlitePath = config.cache_settings.sqlite_db_path || process.env.CACHE__SQLITE_DB_PATH || './data/cache.db';
+      try {
+        // ensure parent directory exists
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fsSync = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const pathSync = require('path');
+        fsSync.mkdirSync(pathSync.dirname(sqlitePath), { recursive: true });
+      } catch (err) {
+        // best-effort
+      }
+      const db = new Database(sqlitePath);
+      db.exec('CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT, expiresAt INTEGER)');
+      return {
+        get: async (k: string) => {
+          const row = db.prepare('SELECT value, expiresAt FROM cache WHERE key = ?').get(k);
+          if (!row) return null;
+          if (row.expiresAt && Date.now() > row.expiresAt) {
+            db.prepare('DELETE FROM cache WHERE key = ?').run(k);
+            return null;
+          }
+          return JSON.parse(row.value);
+        },
+        set: async (k: string, v: any, ttlMs?: number) => {
+          const expiresAt = ttlMs ? Date.now() + ttlMs : null;
+          const str = JSON.stringify(v);
+          db.prepare('INSERT OR REPLACE INTO cache (key, value, expiresAt) VALUES (?,?,?)').run(k, str, expiresAt);
+        },
+        del: async (k: string) => {
+          db.prepare('DELETE FROM cache WHERE key = ?').run(k);
+        },
+      };
+    } catch (err) {
+      throw new Error('SQLite cache selected but "better-sqlite3" is not installed. npm i better-sqlite3');
+    }
+  }
+  // Default
+  return new InMemoryCache(ttlMs);
 }
 
-export async function savePaste(
-  id: string,
-  content: string,
-  name: string,
-  permanent: boolean
-): Promise<string> {
-  const filePath = path.join(JSON_DB_PATH, `${id}.json`);
-  const data = {
-    id,
-    content,
-    name, // Aseguramos que el nombre proporcionado se guarde correctamente
-    permanent: permanent ? "true" : "false",
-    createdAt: new Date().toISOString(),
-  };
+const cache = createCache();
 
-  await fs.mkdir(JSON_DB_PATH, { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2)); // Guardar el JSON con el campo `name`
-  cache.set(getCacheKey(id), { data, timestamp: Date.now() });
-  return id;
+// Database abstraction
+interface DatabaseBackend {
+  savePaste(id: string, content: string, name: string, permanent: boolean): Promise<string>;
+  getPaste(id: string): Promise<Paste | null>;
+  deletePaste(id: string): Promise<void>;
+  updatePasteName(id: string, newName: string): Promise<Paste | null>;
+  deleteExpiredPastes(): Promise<void>;
+  getAllPastes(): Promise<Paste[]>;
+}
+
+class JsonDatabase implements DatabaseBackend {
+  private jsonPath: string;
+  constructor(jsonPath: string) {
+    this.jsonPath = jsonPath;
+  }
+  private ensureServer() {
+    if (!fs || !pathModule) throw new Error('This function can only be used on the server side.');
+  }
+  private getFilePath(id: string) {
+    return pathModule!.join(this.jsonPath, `${id}.json`);
+  }
+  async savePaste(id: string, content: string, name: string, permanent: boolean) {
+    this.ensureServer();
+    const filePath = this.getFilePath(id);
+    const data: Paste = {
+      id,
+      content,
+      name,
+      permanent: permanent ? 'true' : 'false',
+      createdAt: new Date().toISOString(),
+    };
+    await fs!.mkdir(this.jsonPath, { recursive: true });
+    // compress and store binary
+    const payloadBuf = Buffer.from(JSON.stringify(data));
+    const compressed = await compressBuffer(payloadBuf);
+    await fs!.writeFile(filePath, compressed);
+    // cache holds decompressed object for fast reads
+    await cache.set(`paste_${id}`, data);
+    return id;
+  }
+  async getPaste(id: string) {
+    this.ensureServer();
+    const cacheKey = `paste_${id}`;
+    const cached = await cache.get(cacheKey);
+    if (cached) return cached as Paste;
+    const filePath = this.getFilePath(id);
+    try {
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      const data = JSON.parse(decompressed.toString('utf-8')) as Paste;
+      await cache.set(cacheKey, data);
+      return data;
+    } catch (err: any) {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+  async deletePaste(id: string) {
+    this.ensureServer();
+    const filePath = this.getFilePath(id);
+    await fs!.unlink(filePath).catch((e: NodeJS.ErrnoException) => {
+      if (e.code !== 'ENOENT') throw e;
+    });
+    await cache.del(`paste_${id}`);
+  }
+  async updatePasteName(id: string, newName: string) {
+    this.ensureServer();
+    const filePath = this.getFilePath(id);
+    try {
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      const data = JSON.parse(decompressed.toString('utf-8')) as Paste;
+      data.name = newName;
+      const newBuf = Buffer.from(JSON.stringify(data));
+      const compressed = await compressBuffer(newBuf);
+      await fs!.writeFile(filePath, compressed);
+      await cache.set(`paste_${id}`, data);
+      return data;
+    } catch (err: any) {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+  async deleteExpiredPastes() {
+    this.ensureServer();
+    const files = await fs!.readdir(this.jsonPath).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === 'ENOENT') return [];
+      throw e;
+    });
+    for (const file of files) {
+      const filePath = pathModule!.join(this.jsonPath, file);
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      const paste = JSON.parse(decompressed.toString('utf-8')) as Paste;
+      if (paste.expiresAt && new Date() > new Date(paste.expiresAt)) {
+        await fs!.unlink(filePath);
+        await cache.del(`paste_${paste.id}`);
+      }
+    }
+  }
+  async getAllPastes() {
+    this.ensureServer();
+    const files = await fs!.readdir(this.jsonPath).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === 'ENOENT') return [];
+      throw e;
+    });
+    const out: Paste[] = [];
+    for (const file of files) {
+      const filePath = pathModule!.join(this.jsonPath, file);
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      out.push(JSON.parse(decompressed.toString('utf-8')));
+    }
+    return out;
+  }
+}
+
+// Placeholders for SQL/NoSQL drivers. They lazy-require driver packages and provide minimal implementations.
+class NotImplementedDB implements DatabaseBackend {
+  async savePaste(id: string, content: string, name: string, permanent: boolean): Promise<string> {
+    throw new Error('This database driver is not implemented in this environment. Install and implement the driver.');
+  }
+  async getPaste(id: string): Promise<Paste | null> {
+    throw new Error('This database driver is not implemented in this environment. Install and implement the driver.');
+  }
+  async deletePaste(id: string): Promise<void> {
+    throw new Error('This database driver is not implemented in this environment. Install and implement the driver.');
+  }
+  async updatePasteName(id: string, newName: string): Promise<Paste | null> {
+    throw new Error('This database driver is not implemented in this environment. Install and implement the driver.');
+  }
+  async deleteExpiredPastes(): Promise<void> {
+    // best-effort noop
+  }
+  async getAllPastes(): Promise<Paste[]> {
+    return [];
+  }
+}
+
+function createDatabase(): DatabaseBackend {
+  const t = (config.database.save_type || 'JSON').toString().toLowerCase();
+  if (t === 'json') {
+    return new JsonDatabase(config.database.json_db_path || './data/pastes/');
+  }
+  if (t === 'sqlite' || t === 'sqlite3') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const Database = require('better-sqlite3');
+      const sqlitePath = config.database.sqlite_db_path || './data/pastes.db';
+      try {
+        // ensure parent dir for sqlite DB exists
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fsSync = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const pathSync = require('path');
+        fsSync.mkdirSync(pathSync.dirname(sqlitePath), { recursive: true });
+      } catch (err) {
+        // best-effort
+      }
+      const db = new Database(sqlitePath);
+      // Minimal implementation that uses a simple table "pastes" (id TEXT PRIMARY KEY, payload TEXT)
+      db.exec(`CREATE TABLE IF NOT EXISTS pastes (id TEXT PRIMARY KEY, payload TEXT)`);
+      return {
+        savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
+          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
+          const b64 = compressed.toString('base64');
+          const stmt = db.prepare('INSERT OR REPLACE INTO pastes (id,payload) VALUES (?,?)');
+          stmt.run(id, b64);
+          await cache.set(`paste_${id}`, obj);
+          return id;
+        },
+        getPaste: async (id: string) => {
+          const row = db.prepare('SELECT payload FROM pastes WHERE id = ?').get(id);
+          if (!row) return null;
+          const buf = Buffer.from(row.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
+        },
+        deletePaste: async (id: string) => {
+          db.prepare('DELETE FROM pastes WHERE id = ?').run(id);
+          await cache.del(`paste_${id}`);
+        },
+        updatePasteName: async (id: string, newName: string) => {
+          const row = db.prepare('SELECT payload FROM pastes WHERE id = ?').get(id);
+          if (!row) return null;
+          const buf = Buffer.from(row.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          parsed.name = newName;
+          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
+          db.prepare('UPDATE pastes SET payload = ? WHERE id = ?').run(newCompressed.toString('base64'), id);
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
+        },
+        deleteExpiredPastes: async () => {
+          // No-op by default; TTL handling can be implemented on application level
+        },
+        getAllPastes: async () => {
+          const rows = db.prepare('SELECT payload FROM pastes').all();
+          return await Promise.all(
+            rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+        },
+      };
+    } catch (err) {
+      throw new Error('SQLite selected but "better-sqlite3" is not installed. npm i better-sqlite3');
+    }
+  }
+  // MongoDB
+  if (t === 'mongodb' || t === 'mongo') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { MongoClient } = require('mongodb');
+      const uri = config.database.mongodb_uri;
+      if (!uri) throw new Error('MONGODB URI not provided');
+      const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+      // connect lazily
+      const collPromise = client.connect().then(() => client.db().collection('pastes'));
+      return {
+        savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
+          const coll = await collPromise;
+          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
+          const b64 = compressed.toString('base64');
+          await coll.updateOne({ id }, { $set: { payload: b64 } }, { upsert: true });
+          await cache.set(`paste_${id}`, obj);
+          return id;
+        },
+        getPaste: async (id: string) => {
+          const coll = await collPromise;
+          const doc = await coll.findOne({ id });
+          if (!doc || !doc.payload) return null;
+          const buf = Buffer.from(doc.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
+        },
+        deletePaste: async (id: string) => {
+          const coll = await collPromise;
+          await coll.deleteOne({ id });
+          await cache.del(`paste_${id}`);
+        },
+        updatePasteName: async (id: string, newName: string) => {
+          const coll = await collPromise;
+          const doc = await coll.findOne({ id });
+          if (!doc || !doc.payload) return null;
+          const buf = Buffer.from(doc.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          parsed.name = newName;
+          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
+          await coll.updateOne({ id }, { $set: { payload: newCompressed.toString('base64') } });
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
+        },
+        deleteExpiredPastes: async () => {
+          // TTL handling if needed
+        },
+        getAllPastes: async () => {
+          const coll = await collPromise;
+          const docs = await coll.find().toArray();
+          return await Promise.all(
+            docs.map(async (d: any) => {
+              if (!d.payload) return null;
+              const buf = Buffer.from(d.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+        },
+      };
+    } catch (err) {
+      throw new Error('MongoDB selected but "mongodb" driver is not installed. npm i mongodb');
+    }
+  }
+  // Postgres / MariaDB (via knex would be ideal) - provide not-implemented stubs that suggest installing pg/mysql2
+  if (t === 'postgres' || t === 'postgresql' || t === 'mariadb' || t === 'mysql') {
+    try {
+      // Try knex for cross-db support
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const Knex = require('knex');
+      const client = config.database.postgres_uri ? 'pg' : 'mysql2';
+      const knex = Knex({
+        client,
+        connection: config.database.postgres_uri || config.database.mariadb_uri,
+      });
+      // ensure table
+      knex.schema.hasTable('pastes').then((exists: boolean) => {
+        if (!exists) {
+          return knex.schema.createTable('pastes', (t: any) => {
+            t.string('id').primary();
+            t.text('payload');
+          });
+        }
+      });
+      return {
+        savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
+          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
+          const b64 = compressed.toString('base64');
+          await knex('pastes').insert({ id, payload: b64 }).onConflict('id').merge();
+          await cache.set(`paste_${id}`, obj);
+          return id;
+        },
+        getPaste: async (id: string) => {
+          const row = await knex('pastes').where({ id }).first();
+          if (!row) return null;
+          const buf = Buffer.from(row.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
+        },
+        deletePaste: async (id: string) => {
+          await knex('pastes').where({ id }).del();
+          await cache.del(`paste_${id}`);
+        },
+        updatePasteName: async (id: string, newName: string) => {
+          const row = await knex('pastes').where({ id }).first();
+          if (!row) return null;
+          const buf = Buffer.from(row.payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          parsed.name = newName;
+          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
+          await knex('pastes').where({ id }).update({ payload: newCompressed.toString('base64') });
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
+        },
+        deleteExpiredPastes: async () => {},
+        getAllPastes: async () => {
+          const rows = await knex('pastes').select('payload');
+          return await Promise.all(
+            rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+        },
+      };
+    } catch (err) {
+      throw new Error('SQL DB selected but required drivers (knex + client) are not installed. npm i knex pg mysql2');
+    }
+  }
+  // Cassandra
+  if (t === 'cassandra') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const cassandra = require('cassandra-driver');
+      const client = new cassandra.Client({ contactPoints: ['127.0.0.1'], localDataCenter: 'datacenter1', keyspace: process.env.CASSANDRA_KEYSPACE || 'pastes' });
+      return {
+        savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
+          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
+          await client.execute('INSERT INTO pastes (id,payload) VALUES (?,?)', [id, compressed.toString('base64')], { prepare: true });
+          await cache.set(`paste_${id}`, obj);
+          return id;
+        },
+        getPaste: async (id: string) => {
+          const res = await client.execute('SELECT payload FROM pastes WHERE id = ?', [id], { prepare: true });
+          if (res.rowLength === 0) return null;
+          const buf = Buffer.from(res.rows[0].payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
+        },
+        deletePaste: async (id: string) => {
+          await client.execute('DELETE FROM pastes WHERE id = ?', [id], { prepare: true });
+          await cache.del(`paste_${id}`);
+        },
+        updatePasteName: async (id: string, newName: string) => {
+          const res = await client.execute('SELECT payload FROM pastes WHERE id = ?', [id], { prepare: true });
+          if (res.rowLength === 0) return null;
+          const buf = Buffer.from(res.rows[0].payload, 'base64');
+          const decompressed = await decompressBuffer(buf);
+          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          parsed.name = newName;
+          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
+          await client.execute('INSERT INTO pastes (id,payload) VALUES (?,?)', [id, newCompressed.toString('base64')], { prepare: true });
+          await cache.set(`paste_${id}`, parsed);
+          return parsed;
+        },
+        deleteExpiredPastes: async () => {},
+        getAllPastes: async () => {
+          const res = await client.execute('SELECT payload FROM pastes');
+          return await Promise.all(
+            res.rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+        },
+      };
+    } catch (err) {
+      throw new Error('Cassandra selected but "cassandra-driver" is not installed. npm i cassandra-driver');
+    }
+  }
+  return new NotImplementedDB();
+}
+
+const db = createDatabase();
+
+export async function savePaste(id: string, content: string, name: string, permanent: boolean): Promise<string> {
+  return db.savePaste(id, content, name, permanent);
 }
 
 export async function getPaste(id: string): Promise<Paste | null> {
-  if (!fs || !path) throw new Error('This function can only be used on the server side.');
-
-  const cacheKey: string = getCacheKey(id);
-
-  // Check cache
-  if (cache.has(cacheKey)) {
-    const cached: CacheEntry | undefined = cache.get(cacheKey);
-    if (cached && isCacheValid(cached.timestamp)) {
-      return cached.data;
-    }
-    cache.delete(cacheKey); // Remove expired cache
-  }
-
-  // Read from file
-  const filePath: string = path.join(JSON_DB_PATH, `${id}.json`);
-  try {
-    const fileContent: string = await fs.readFile(filePath, 'utf-8');
-    const data: Paste = JSON.parse(fileContent);
-    // Update cache
-    cache.set(cacheKey, { data, timestamp: Date.now() });
-    return data;
-  } catch (error: any) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null; // File not found
-    }
-    throw error;
-  }
+  return db.getPaste(id);
 }
 
 export async function deletePaste(id: string): Promise<void> {
-  if (!fs || !path) throw new Error('This function can only be used on the server side.');
-
-  const filePath: string = path.join(JSON_DB_PATH, `${id}.json`);
-
-  // Delete from file
-  await fs.unlink(filePath).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error; // Ignore if file doesn't exist
-  });
-
-  // Delete from cache
-  cache.delete(getCacheKey(id));
+  return db.deletePaste(id);
 }
 
 export async function updatePasteName(id: string, newName: string): Promise<Paste | null> {
-  if (!fs || !path) throw new Error('This function can only be used on the server side.');
-
-  const filePath: string = path.join(JSON_DB_PATH, `${id}.json`);
-  try {
-    const fileContent: string = await fs.readFile(filePath, 'utf-8');
-    const data: Paste = JSON.parse(fileContent);
-    data.name = newName;
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
-    // Update cache
-    cache.set(getCacheKey(id), { data, timestamp: Date.now() });
-    return data;
-  } catch (error: any) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
+  return db.updatePasteName(id, newName);
 }
 
 export async function deleteExpiredPastes(): Promise<void> {
-  if (!fs || !path) throw new Error('This function can only be used on the server side.');
-
-  const files = await fs.readdir(JSON_DB_PATH);
-  for (const file of files) {
-    if (file.endsWith('.json')) {
-      const filePath = path.join(JSON_DB_PATH, file);
-      const fileContent = await fs.readFile(filePath, 'utf-8');
-      const paste: Paste = JSON.parse(fileContent);
-
-      if (paste.expiresAt && new Date() > new Date(paste.expiresAt)) {
-        await fs.unlink(filePath);
-        cache.delete(getCacheKey(paste.id));
-      }
-    }
-  }
+  return db.deleteExpiredPastes();
 }
 
 export async function getAllPastes() {
-  if (!fs || !path) throw new Error('This function can only be used on the server side.');
-
-  try {
-    const files = await fs.readdir(JSON_DB_PATH);
-    const pastes = [];
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const filePath = path.join(JSON_DB_PATH, file);
-        const fileContent = await fs.readFile(filePath, 'utf-8');
-        pastes.push(JSON.parse(fileContent));
-      }
-    }
-    return pastes;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return []; // Directory not found
-    }
-    throw error;
-  }
+  return db.getAllPastes();
 }
 
 export async function fetchPastes() {
