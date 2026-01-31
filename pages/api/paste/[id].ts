@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { deletePaste, getPaste } from '../../../utils/db';
+import { deletePaste, getPaste, updatePasteName } from '../../../utils/db';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { id } = req.query;
@@ -29,6 +29,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         await deletePaste(id);
         return res.status(200).json({ success: true });
+    }
+
+    if (req.method === 'PATCH') {
+        // Update the paste name
+        const { name } = req.body;
+        if (typeof name !== 'string' || name.trim().length === 0) {
+            return res.status(400).json({ message: 'Invalid name' });
+        }
+
+        const paste = await getPaste(id);
+        if (!paste) {
+            return res.status(404).json({ message: 'Paste not found' });
+        }
+
+        const updated = await updatePasteName(id, name.trim());
+        if (!updated) {
+            return res.status(500).json({ message: 'Failed to update paste' });
+        }
+
+        return res.status(200).json({ success: true, paste: updated });
     }
 
     res.setHeader('Allow', ['GET', 'DELETE']);
