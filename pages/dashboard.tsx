@@ -334,7 +334,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                     onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#d97706')}
                                                     onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#fa8c16')}
                                                 >
-                                                    Renombrar
+                                                    Rename
                                                 </button>
                                             )}
                                             <button
@@ -390,7 +390,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             color: '#e6e6e6',
                         }}
                     >
-                        <h3 style={{ margin: 0, marginBottom: '10px' }}>Renombrar paste</h3>
+                        <h3 style={{ margin: 0, marginBottom: '6px' }}>Rename paste</h3>
+                        <p style={{ margin: 0, marginBottom: '10px', fontSize: '13px', color: '#999' }}>
+                            Use <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;br&gt;</code> for line breaks and <code style={{ background: '#2a2a2a', padding: '1px 4px', borderRadius: 4 }}>&lt;hr&gt;</code> for a horizontal line.
+                        </p>
                         <input
                             autoFocus
                             value={renameValue}
@@ -421,7 +424,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                     cursor: 'pointer',
                                 }}
                             >
-                                Cancelar
+                                Cancel
                             </button>
                             <button
                                 onClick={handleSaveRename}
@@ -434,7 +437,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                     cursor: 'pointer',
                                 }}
                             >
-                                Guardar
+                                Save
                             </button>
                         </div>
                     </div>
