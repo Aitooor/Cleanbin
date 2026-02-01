@@ -714,47 +714,57 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         {paste.id}
                                     </div>
                                     <div>{paste.permanent ? 'Yes' : 'No'}</div>
-                                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
-                                        <button
-                                            className="action-icon preview"
-                                            title="Preview"
-                                            aria-label="Preview"
-                                            onClick={() => window.open(`/${paste.id}`, '_blank')}
-                                        >
-                                            <FaEye />
-                                        </button>
-                                        <button
-                                            className="action-icon copy"
-                                            title="Copy URL"
-                                            aria-label="Copy URL"
-                                            onClick={() => handleCopyToClipboard(`${window.location.origin}/${paste.id}`, 'URL copied to clipboard')}
-                                        >
-                                            <FaClipboard />
-                                        </button>
-                                        <button
-                                            className="action-icon clone"
-                                            title="Clone"
-                                            aria-label="Clone"
-                                            onClick={() => handleClonePaste(paste.id)}
-                                        >
-                                            <FaClone />
-                                        </button>
-                                        <button
-                                            className="action-icon rename"
-                                            title="Rename"
-                                            aria-label="Rename"
-                                            onClick={() => openRenameModal(paste)}
-                                        >
-                                            <FaPen />
-                                        </button>
-                                        <button
-                                            className="action-icon delete"
-                                            title="Delete"
-                                            aria-label="Delete"
-                                            onClick={() => handleDeletePaste(paste.id)}
-                                        >
-                                            <FaTrash />
-                                        </button>
+                                    <div className="action-panel">
+                                        <div className="mobile-checkbox">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedIds.has(paste.id)}
+                                                onChange={() => toggleSelect(paste.id)}
+                                                aria-label="Select paste"
+                                            />
+                                        </div>
+                                        <div className="actions-icons">
+                                            <button
+                                                className="action-icon preview"
+                                                title="Preview"
+                                                aria-label="Preview"
+                                                onClick={() => window.open(`/${paste.id}`, '_blank')}
+                                            >
+                                                <FaEye />
+                                            </button>
+                                            <button
+                                                className="action-icon copy"
+                                                title="Copy URL"
+                                                aria-label="Copy URL"
+                                                onClick={() => handleCopyToClipboard(`${window.location.origin}/${paste.id}`, 'URL copied to clipboard')}
+                                            >
+                                                <FaClipboard />
+                                            </button>
+                                            <button
+                                                className="action-icon clone"
+                                                title="Clone"
+                                                aria-label="Clone"
+                                                onClick={() => handleClonePaste(paste.id)}
+                                            >
+                                                <FaClone />
+                                            </button>
+                                            <button
+                                                className="action-icon rename"
+                                                title="Rename"
+                                                aria-label="Rename"
+                                                onClick={() => openRenameModal(paste)}
+                                            >
+                                                <FaPen />
+                                            </button>
+                                            <button
+                                                className="action-icon delete"
+                                                title="Delete"
+                                                aria-label="Delete"
+                                                onClick={() => handleDeletePaste(paste.id)}
+                                            >
+                                                <FaTrash />
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             ))

@@ -324,11 +324,24 @@ h1, h2, h3 {
     justify-content: center;
 }
 
-@media (max-width: 599px) {
-    .paste-grid > div:first-child {
-        justify-content: flex-start;
-        padding-left: 6px;
-    }
+.action-panel {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+}
+
+.mobile-checkbox {
+    display: none;
+    align-items: center;
+}
+
+.actions-icons {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
 }
 
 /* Top action buttons row (Delete All / Permanent / etc) */
@@ -354,6 +367,33 @@ h1, h2, h3 {
 .short-label { display: none; }
 
 @media (max-width: 599px) {
+    /* Oculta el checkbox de la columna izquierda en móvil */
+    .paste-grid > div:first-child {
+        display: none !important;
+    }
+
+    /* Fila de acciones: todo alineado al borde izquierdo */
+    .paste-grid > div:last-child {
+        justify-content: flex-start;
+    }
+
+    .action-panel {
+        width: 100%;
+        justify-content: flex-start;
+        align-items: center;
+    }
+
+    .mobile-checkbox {
+        display: flex;
+        gap: 6px;
+    }
+
+    /* Iconos pegados a la derecha, checkbox a la izquierda */
+    .actions-icons {
+        margin-left: auto;
+        justify-content: flex-end;
+    }
+
     .actions-row {
         gap: 6px;
     }
@@ -363,6 +403,7 @@ h1, h2, h3 {
         padding: 6px 8px;
         font-size: 13px;
     }
+
     /* ensure two columns on small screens; full width on very small */
     @media (max-width: 420px) {
         .actions-row button {
@@ -472,7 +513,6 @@ h1, h2, h3 {
     display: flex;
     gap: 8px;
     align-items: center;
-    justify-content: flex-end;
     flex-wrap: nowrap; /* keep icons inline */
 }
 
@@ -483,6 +523,13 @@ h1, h2, h3 {
     margin: 0 8px 0 4px;
     width: 16px;
     height: 16px;
+}
+
+@media (max-width: 599px) {
+    .paste-grid input[type="checkbox"] {
+        /* en móvil, el checkbox de acciones va pegado a la izquierda del card */
+        margin: 0 8px 0 0;
+    }
 }
 
 /* Header row: keep checkbox aligned left on small screens */
@@ -508,8 +555,6 @@ h1, h2, h3 {
 }
 .paste-grid > div:first-child {
     position: relative;
-    display: flex;
-    align-items: center;
     padding-left: 6px;
 }
 
