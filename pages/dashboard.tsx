@@ -1187,18 +1187,26 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                     Preview sample & continue
                                 </button>
                             ) : (
-                                <button
-                                    onClick={() => {
-                                        if ((deletePayload.confirmText || '').toUpperCase() === 'DELETE') {
-                                            performBulkDelete();
-                                        } else {
-                                            addNotification('You must type DELETE to confirm.');
-                                        }
-                                    }}
-                                    style={{ backgroundColor: '#d9363e', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                                >
-                                    Delete permanently
-                                </button>
+                                <>
+                                    <button
+                                        onClick={() => setConfirmStage(1)}
+                                        style={{ backgroundColor: '#3a3a3a', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Back
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if ((deletePayload.confirmText || '').toUpperCase() === 'DELETE') {
+                                                performBulkDelete();
+                                            } else {
+                                                addNotification('You must type DELETE to confirm.');
+                                            }
+                                        }}
+                                        style={{ backgroundColor: '#d9363e', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Delete permanently
+                                    </button>
+                                </>
                             )}
                         </div>
                         {/* Preview list */}
