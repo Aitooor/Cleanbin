@@ -769,8 +769,8 @@ li.paste-item, .admin-panel li, .admins-list-section li {
 }
 
 .dashboard-search {
-    width: 260px;
-    max-width: 100%;
+    width: 100%;
+    max-width: none;
     padding: 8px 12px;
     border-radius: 6px;
     border: 1px solid #3a3a3a;
@@ -831,7 +831,7 @@ li.paste-item, .admin-panel li, .admins-list-section li {
     }
     .dashboard-search {
         width: 100%;
-        max-width: 260px;
+        max-width: none;
     }
     .logout-button {
         padding: 8px 14px;
