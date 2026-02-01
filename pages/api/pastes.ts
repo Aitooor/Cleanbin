@@ -1,8 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { parse } from 'cookie';
-import { savePaste, getPastes } from '../../utils/db';
+import { savePaste, getPastes, deletePaste, getAllPastes } from '../../utils/db';
 import { getPage, invalidateCache, startPrecache } from '../../utils/pastesCache';
 import config from '../../utils/config';
+import { removePasteFromCache } from '../../utils/pastesCache';
+import { postMessage } from '../../utils/broadcast';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -48,6 +50,70 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       res.status(500).json({ message: 'Failed to create paste' });
     }
     return;
+  }
+  if (req.method === 'DELETE') {
+    try {
+      // Accept JSON body with { type: 'all'|'permanent'|'temporary', ids?: string[], filter?: string }
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const type = (req.query.type as string) || body.type || 'all';
+      const ids: string[] | undefined = body.ids;
+      const filter: string | undefined = body.filter;
+
+      // Determine which ids to delete
+      let toDeleteIds: string[] = [];
+      if (Array.isArray(ids) && ids.length > 0) {
+        toDeleteIds = ids;
+      } else {
+        // fetch all pastes and filter server-side
+        const all = await getAllPastes().catch(() => null);
+        if (!all) {
+          return res.status(500).json({ message: 'Failed to load pastes for deletion' });
+        }
+        if (type === 'permanent') {
+          toDeleteIds = all.filter((p: any) => String(p.permanent) === 'true' || p.permanent === true).map((p: any) => p.id);
+        } else if (type === 'temporary' || type === 'temp') {
+          toDeleteIds = all.filter((p: any) => !(String(p.permanent) === 'true' || p.permanent === true)).map((p: any) => p.id);
+        } else {
+          // all or other
+          toDeleteIds = all.map((p: any) => p.id);
+        }
+        if (filter && filter.trim()) {
+          const q = filter.toLowerCase();
+          toDeleteIds = all
+            .filter((p: any) => (p.name || '').toLowerCase().includes(q) || (p.content || '').toLowerCase().includes(q) || (p.id || '').toLowerCase().includes(q))
+            .map((p: any) => p.id);
+        }
+      }
+
+      // perform deletions
+      const deleted: string[] = [];
+      for (const id of toDeleteIds) {
+        try {
+          await deletePaste(id);
+          deleted.push(id);
+          try {
+            removePasteFromCache(id);
+          } catch (e) {}
+        } catch (err) {
+          // continue on error
+        }
+      }
+
+      // ensure cache consistency
+      try {
+        invalidateCache();
+      } catch (e) {}
+
+      // broadcast bulk deletion
+      try {
+        postMessage({ type: 'pastes_bulk_deleted', ids: deleted });
+      } catch (e) {}
+
+      return res.status(200).json({ deleted: deleted.length, ids: deleted });
+    } catch (err) {
+      console.error('DELETE /api/pastes error:', err);
+      return res.status(500).json({ message: 'Failed to delete pastes' });
+    }
   }
 
   res.setHeader('Allow', ['GET', 'POST']);

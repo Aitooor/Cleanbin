@@ -24,6 +24,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [loading, setLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
     const [nextToken, setNextToken] = useState<string | null | undefined>(undefined);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [deletePayload, setDeletePayload] = useState<any>(null);
+    const [confirmStage, setConfirmStage] = useState(0);
     const sentinelRef = React.useRef<HTMLDivElement | null>(null);
     // simpler: always render fallback list
 
@@ -181,6 +185,87 @@ const Dashboard: React.FC<DashboardProps> = () => {
         }
     };
 
+    const toggleSelect = (id: string) => {
+        setSelectedIds((prev) => {
+            const copy = new Set(prev);
+            if (copy.has(id)) copy.delete(id);
+            else copy.add(id);
+            return copy;
+        });
+    };
+
+    const selectAllFiltered = (checked: boolean) => {
+        if (checked) {
+            setSelectedIds(new Set(filteredPastes.map((p) => p.id)));
+        } else {
+            setSelectedIds(new Set());
+        }
+    };
+
+    const openDeleteModal = (payload: any) => {
+        setDeletePayload(payload);
+        setConfirmStage(1);
+        setShowDeleteModal(true);
+    };
+
+    const closeDeleteModal = () => {
+        setShowDeleteModal(false);
+        setDeletePayload(null);
+        setConfirmStage(0);
+    };
+
+    const performBulkDelete = async () => {
+        if (!deletePayload) return;
+        const body: any = {};
+        if (deletePayload.mode === 'selected') {
+            body.ids = Array.from(selectedIds);
+        } else if (deletePayload.mode === 'filtered') {
+            body.filter = deletePayload.filter || '';
+            body.type = 'all';
+        } else if (deletePayload.mode === 'permanent' || deletePayload.mode === 'temporary' || deletePayload.mode === 'all') {
+            body.type = deletePayload.mode === 'temporary' ? 'temporary' : deletePayload.mode;
+        }
+        try {
+            const res = await fetch('/api/pastes', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (res.ok) {
+                const data = await res.json();
+                // remove deleted ids locally if provided, otherwise refresh
+                if (data.ids && Array.isArray(data.ids)) {
+                    const deletedIds: string[] = data.ids;
+                    setPastes((prev) => prev.filter((p) => !deletedIds.includes(p.id)));
+                    setSelectedIds((prev) => {
+                        const copy = new Set(prev);
+                        for (const id of deletedIds) copy.delete(id);
+                        return copy;
+                    });
+                } else {
+                    // fallback: refetch
+                    await fetchPastes(true);
+                }
+                addNotification(`Deleted ${data.deleted || 0} pastes.`);
+                // broadcast local change as well
+                try {
+                    const { postMessage } = await import('../utils/broadcast');
+                    if (data.ids && Array.isArray(data.ids)) {
+                        postMessage({ type: 'pastes_bulk_deleted', ids: data.ids });
+                    } else {
+                        postMessage({ type: 'pastes_bulk_deleted', ids: [] });
+                    }
+                } catch (err) {}
+            } else {
+                addNotification('Failed to delete pastes.');
+            }
+        } catch (err) {
+            addNotification('Error deleting pastes.');
+        } finally {
+            closeDeleteModal();
+        }
+    };
+
     const openRenameModal = (paste: Paste) => {
         setRenameTargetId(paste.id);
         setRenameValue(paste.name || '');
@@ -287,6 +372,46 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     Logout
                 </button>
             </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 56, marginBottom: 16 }}>
+                <button
+                    onClick={() => openDeleteModal({ mode: 'all' })}
+                    style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                >
+                    Delete All
+                </button>
+                <button
+                    onClick={() => openDeleteModal({ mode: 'permanent' })}
+                    style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                >
+                    Delete Permanent
+                </button>
+                <button
+                    onClick={() => openDeleteModal({ mode: 'temporary' })}
+                    style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                >
+                    Delete Temporary
+                </button>
+                <button
+                    onClick={() => openDeleteModal({ mode: 'filtered', filter: searchTerm })}
+                    style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                >
+                    Delete Filtered
+                </button>
+                <button
+                    onClick={() => openDeleteModal({ mode: 'selected' })}
+                    disabled={selectedIds.size === 0}
+                    style={{
+                        backgroundColor: selectedIds.size === 0 ? '#333' : '#722ed1',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 6,
+                        padding: '8px 12px',
+                        cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
+                    }}
+                >
+                    Delete Selected ({selectedIds.size})
+                </button>
+            </div>
             {/* Campo de búsqueda */}
             <div style={{ marginBottom: '20px' }}>
                 <input
@@ -348,7 +473,15 @@ const Dashboard: React.FC<DashboardProps> = () => {
             <div className="dashboard-content">
                 <div className="card">
                     <h1 className="card-title">Pastes</h1>
-                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr 3fr', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222', fontWeight: 700 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222', fontWeight: 700, alignItems: 'center' }}>
+                        <div>
+                            <input
+                                type="checkbox"
+                                onChange={(e) => selectAllFiltered(e.target.checked)}
+                                checked={filteredPastes.length > 0 && selectedIds.size === filteredPastes.length}
+                                aria-label="Select all filtered"
+                            />
+                        </div>
                         <div>Name</div>
                         <div>UUID</div>
                         <div>Permanent</div>
@@ -359,7 +492,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>No pastes to show</div>
                         ) : (
                             filteredPastes.map((paste) => (
-                                <div key={paste.id} style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr 3fr', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #111' }}>
+                                <div key={paste.id} style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #111' }}>
+                                    <div>
+                                        <input type="checkbox" checked={selectedIds.has(paste.id)} onChange={() => toggleSelect(paste.id)} />
+                                    </div>
                                     <div>{paste.name}</div>
                                     <div onClick={() => handleCopyToClipboard(paste.id)} style={{ cursor: 'pointer', color: 'blue', textDecoration: 'underline' }}>
                                         {paste.id}
@@ -472,6 +608,78 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             >
                                 Save
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showDeleteModal && deletePayload && (
+                <div
+                    onClick={closeDeleteModal}
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        backgroundColor: 'rgba(0,0,0,0.6)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 3000,
+                    }}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                            backgroundColor: '#0f0f0f',
+                            padding: '24px',
+                            borderRadius: '8px',
+                            width: '520px',
+                            boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+                            color: '#e6e6e6',
+                        }}
+                    >
+                        <h3 style={{ marginTop: 0 }}>
+                            {confirmStage === 1 ? 'Confirm deletion' : 'FINAL CONFIRMATION'}
+                        </h3>
+                        <p style={{ color: '#bbb' }}>
+                            {confirmStage === 1
+                                ? `You are about to delete ${deletePayload.mode === 'selected' ? selectedIds.size : deletePayload.mode === 'filtered' ? 'filtered items' : deletePayload.mode} items. This action is irreversible.`
+                                : 'This is the final confirmation. Type DELETE to confirm permanently.'}
+                        </p>
+                        {confirmStage === 2 && (
+                            <input
+                                value={deletePayload.confirmText || ''}
+                                onChange={(e) => setDeletePayload((p: any) => ({ ...p, confirmText: e.target.value }))}
+                                placeholder="Type DELETE to confirm"
+                                style={{ width: '100%', padding: '10px', borderRadius: 6, marginBottom: 12, background: '#1a1a1a', border: '1px solid #333', color: '#fff' }}
+                            />
+                        )}
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                            <button
+                                onClick={closeDeleteModal}
+                                style={{ backgroundColor: '#3a3a3a', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                            >
+                                Cancel
+                            </button>
+                            {confirmStage === 1 ? (
+                                <button
+                                    onClick={() => setConfirmStage(2)}
+                                    style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                >
+                                    Yes, continue
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={() => {
+                                        if ((deletePayload.confirmText || '').toUpperCase() === 'DELETE') {
+                                            performBulkDelete();
+                                        } else {
+                                            addNotification('You must type DELETE to confirm.');
+                                        }
+                                    }}
+                                    style={{ backgroundColor: '#d9363e', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                >
+                                    Delete permanently
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>
