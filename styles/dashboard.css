@@ -261,8 +261,8 @@ h1, h2, h3 {
 }
 
 /* Improve header/search/counters responsiveness */
-.dashboard-container input[type="text"] {
-    width: 100% !important; /* override inline width on small screens */
+.dashboard-container input[type="text"]:not(.dashboard-search) {
+    width: 100%;
     max-width: 760px;
     box-sizing: border-box;
 }
@@ -279,6 +279,20 @@ h1, h2, h3 {
     gap: 20px;
     flex-wrap: wrap;
     justify-content: center;
+    margin-bottom: 20px;
+}
+
+@media (max-width: 599px) {
+    .counters {
+        justify-content: center;
+    }
+    .counters > div:first-child {
+        flex: 0 0 100%;
+    }
+    .counters > div:nth-child(2),
+    .counters > div:nth-child(3) {
+        flex: 1 1 calc(50% - 10px);
+    }
 }
 
 /* MOBILE: hide the large table-like header labels and show inline labels inside each card row */
@@ -732,31 +746,66 @@ li.paste-item, .admin-panel li, .admins-list-section li {
     }
 }
 
-/* Estilos para el botón de logout */
+/* Estilos para el botón de logout y la cabecera */
 .dashboard-header {
     position: relative;
-    height: 60px;
+    height: auto;
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between; /* search izquierda, logout derecha */
     align-items: center;
-    padding: 0 20px;
-    background-color: #1e1e1e;
-    border-bottom: 2px solid #333;
+    padding: 18px 20px 16px;
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    background: transparent;
+    border-bottom: none;
+    gap: 12px;
+}
+
+.dashboard-search {
+    width: 260px;
+    max-width: 100%;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #3a3a3a;
+    background-color: #101115;
+    color: #f5f5f5;
+    font-size: 14px;
 }
 
 .logout-button {
-    display: flex;
+    display: inline-flex;
     align-items: center;
+    gap: 6px;
     background-color: #ff4d4f;
-    color: white;
+    color: #fff;
     border: none;
-    padding: 8px 12px;
-    border-radius: 4px;
+    padding: 8px 18px;
+    border-radius: 999px;
     cursor: pointer;
     font-size: 14px;
-    font-weight: bold;
+    font-weight: 600;
+    transition: background-color 0.15s ease;
 }
 
 .logout-button:hover {
-    background-color: #d9363e;
+    background-color: #d9363e; /* sin glow, solo cambio de color */
+}
+
+.logout-icon {
+    font-size: 16px;
+}
+
+@media (max-width: 600px) {
+    .dashboard-header {
+        padding: 10px 10px 14px;
+    }
+    .dashboard-search {
+        flex: 1 1 auto;
+        max-width: none;
+    }
+    .logout-button {
+        padding: 8px 14px;
+        font-size: 13px;
+    }
 }

@@ -536,49 +536,20 @@ const Dashboard: React.FC<DashboardProps> = () => {
     return (
         <div className="dashboard-container">
             <div className="dashboard-header">
-                <button
-                    onClick={handleLogout}
-                    className="logout-button"
-                    style={{
-                        position: 'absolute',
-                        top: '10px',
-                        right: '10px',
-                        backgroundColor: '#ff4d4f',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: '5px',
-                        padding: '8px 15px',
-                        cursor: 'pointer',
-                        transition: 'background-color 0.3s',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                    }}
-                    onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#d9363e')}
-                    onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#ff4d4f')}
-                >
-                    <FiLogOut style={{ marginRight: '5px' }} />
-                    Logout
-                </button>
-            </div>
-            {/* Buttons moved inside the card under the "Pastes" title */}
-            {/* Campo de búsqueda */}
-            <div style={{ marginBottom: '20px' }}>
                 <input
                     type="text"
                     placeholder="Search..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    style={{
-                        width: '300px', // Ancho reducido
-                        padding: '8px',
-                        borderRadius: '5px',
-                        border: '1px solid #ccc',
-                    }}
+                    className="dashboard-search"
                 />
+                <button onClick={handleLogout} className="logout-button">
+                    <FiLogOut className="logout-icon" />
+                    Logout
+                </button>
             </div>
             {/* Contadores de pastes */}
-            <div className="counters" style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
+            <div className="counters">
                 <div
                     style={{
                         padding: '12px 18px',
@@ -682,8 +653,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                 Selected ({selectedIds.size})
                             </button>
                         </div>
-                        <div className="delete-options-summary" style={{ marginTop: 8, color: '#bbb', fontSize: 13 }}>
-                            Summary: All · Permanent · Temporary · Filtered · Selected
+                        <div className="delete-warning" style={{ marginTop: 8, color: '#bbb', fontSize: 13 }}>
+                            Take care when deleting pastes
                         </div>
                     </div>
                     <div className="paste-grid paste-grid--header" style={{ borderBottom: '1px solid #222', fontWeight: 700 }}>
