@@ -29,6 +29,42 @@ export function invalidateCache() {
   cached = null;
 }
 
+// Fast in-memory updates to make listings reflect changes instantly without a full refresh.
+export function addPasteToCache(paste: Paste) {
+  if (!cached) {
+    cached = { ts: Date.now(), total: 1, items: [paste] };
+    return;
+  }
+  // Prepend newest paste to the cached list and update total + timestamp.
+  cached.items.unshift(paste);
+  cached.total = (cached.total || 0) + 1;
+  cached.ts = Date.now();
+}
+
+export function removePasteFromCache(id: string) {
+  if (!cached) return;
+  const before = cached.items.length;
+  cached.items = cached.items.filter((p) => p.id !== id);
+  const after = cached.items.length;
+  if (before !== after) {
+    cached.total = Math.max(0, (cached.total || 0) - 1);
+    cached.ts = Date.now();
+  }
+}
+
+export function updatePasteNameInCache(id: string, name: string) {
+  if (!cached) return;
+  let changed = false;
+  cached.items = cached.items.map((p) => {
+    if (p.id === id) {
+      changed = true;
+      return { ...p, name };
+    }
+    return p;
+  });
+  if (changed) cached.ts = Date.now();
+}
+
 export function startPrecache() {
   if (started) return;
   started = true;

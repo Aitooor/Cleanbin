@@ -33,26 +33,47 @@ const Dashboard: React.FC<DashboardProps> = () => {
         setMounted(true);
     }, []);
 
-    useEffect(() => {
-        const fetchInitial = async () => {
-            try {
-                setLoading(true);
-                const response = await fetch(`/api/pastes?page=1&limit=${limit}`);
-                if (response.ok) {
-                    const body = await response.json();
-                    const items: Paste[] = body.items || [];
-                    setPastes(items);
-                    setFilteredPastes(items);
-                    if (typeof body.total === 'number' && body.total >= 0) setTotal(body.total);
-                    // prefer token if backend provides it
-                    setNextToken(body.nextPageToken ?? null);
-                }
-                } finally {
-                setLoading(false);
+    // Fetch paged pastes; force bypasses server-side cache when needed.
+    const fetchPastes = async (force = false) => {
+        try {
+            if (!force) setLoading(true);
+            const forceParam = force ? '&force=1' : '';
+            const response = await fetch(`/api/pastes?page=1&limit=${limit}${forceParam}`);
+            if (response.ok) {
+                const body = await response.json();
+                const items: Paste[] = body.items || [];
+                setPastes(items);
+                setFilteredPastes(items);
+                if (typeof body.total === 'number' && body.total >= 0) setTotal(body.total);
+                setNextToken(body.nextPageToken ?? null);
             }
-        };
-        fetchInitial();
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchPastes(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [limit]);
+
+    // Poll for fresh data when the dashboard is visible to provide near-instant updates.
+    useEffect(() => {
+        if (!mounted) return;
+        let intervalId: number | null = null;
+        const startPolling = () => {
+            // poll every 3 seconds
+            intervalId = window.setInterval(async () => {
+                if (document.visibilityState === 'hidden') return;
+                await fetchPastes(true);
+            }, 3000);
+        };
+        startPolling();
+        return () => {
+            if (intervalId) clearInterval(intervalId);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mounted, limit]);
 
     useEffect(() => {
         // Filtrar los pastes según el término de búsqueda

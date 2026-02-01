@@ -18,8 +18,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ total: result.total, page, limit, items: result.items, nextPageToken: result.nextPageToken || null });
       }
       const result = await getPage(page, limit, force);
-      // Set caching headers for clients (short), server uses in-memory cache for heavy loads
-      res.setHeader('Cache-Control', `public, max-age=${Math.min(60, Math.floor((config.cache.ttl || 3600)))}`);
+      // Prevent client-side caching so dashboard always fetches fresh data immediately.
+      // Server still uses in-memory cache for efficiency, but clients should not reuse older responses.
+      res.setHeader('Cache-Control', 'no-store');
       res.status(200).json({ total: result.total, page, limit, items: result.items });
     } catch (error) {
       console.error('GET /api/pastes error:', error);

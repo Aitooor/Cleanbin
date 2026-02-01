@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { v4 as uuidv4 } from 'uuid';
 import { savePaste, getPaste } from '../../utils/db';
+import { invalidateCache, addPasteToCache } from '../../utils/pastesCache';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (req.method === 'POST') {
@@ -19,6 +20,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const id = uuidv4();
         await savePaste(id, content, (name && typeof name === 'string' ? name : '') || '', permanent);
+        // Try to update in-memory cache quickly to reflect the new paste instantly.
+        try {
+            addPasteToCache({
+                id,
+                content,
+                name: (name && typeof name === 'string' ? name : '') || '',
+                permanent: permanent ? true : false,
+                createdAt: new Date().toISOString(),
+            });
+        } catch (err) {
+            // fallback to full invalidation if update fails
+            try {
+                invalidateCache();
+            } catch (err2) {}
+        }
         return res.status(201).json({ id });
     } else if (req.method === 'GET') {
         const { id } = req.query;

@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { deletePaste, getPaste, updatePasteName } from '../../../utils/db';
+import { invalidateCache, removePasteFromCache, updatePasteNameInCache } from '../../../utils/pastesCache';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { id } = req.query;
@@ -29,6 +30,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         await deletePaste(id);
+        // update in-memory cache quickly
+        try {
+            removePasteFromCache(id);
+        } catch (err) {
+            try {
+                invalidateCache();
+            } catch (e) {}
+        }
         return res.status(200).json({ success: true });
     }
 
@@ -47,6 +56,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const updated = await updatePasteName(id, name.trim());
         if (!updated) {
             return res.status(500).json({ message: 'Failed to update paste' });
+        }
+        // update cache entry name quickly
+        try {
+            updatePasteNameInCache(id, name.trim());
+        } catch (err) {
+            try {
+                invalidateCache();
+            } catch (e) {}
         }
 
         return res.status(200).json({ success: true, paste: updated });
