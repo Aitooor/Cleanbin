@@ -111,7 +111,8 @@ h1, h2, h3 {
     display: flex;
     flex-direction: column;
     align-items: center;
-    margin-top: 48px;
+    margin-top: 0;
+    padding-top: 0;
 }
 
 /* Tabla moderna para listados */
@@ -186,6 +187,7 @@ h1, h2, h3 {
     box-shadow: 0 20px 60px rgba(0,0,0,0.38), 0 8px 32px rgba(30,136,229,0.13);
     padding: 56px 64px;
     margin-bottom: 56px;
+    margin-top: 0;
     width: 100%;
     max-width: 900px;
     transition: box-shadow 0.2s, background 0.2s;
@@ -277,21 +279,22 @@ h1, h2, h3 {
 .counters {
     display: flex;
     gap: 20px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     justify-content: center;
+    margin-top: 2px;
     margin-bottom: 20px;
+    padding-bottom: 0;
 }
 
+/* Counters always in a single row */
 @media (max-width: 599px) {
     .counters {
-        justify-content: center;
+        flex-wrap: nowrap;
+        gap: 12px;
+        margin-bottom: 16px;
     }
-    .counters > div:first-child {
-        flex: 0 0 100%;
-    }
-    .counters > div:nth-child(2),
-    .counters > div:nth-child(3) {
-        flex: 1 1 calc(50% - 10px);
+    .counters > div {
+        flex: 1 1 0;
     }
 }
 
@@ -593,6 +596,7 @@ h1, h2, h3 {
     font-size: 2.8rem;
     font-weight: 900;
     margin-bottom: 34px;
+    margin-top: 0;
     color: #90caf9;
     letter-spacing: -2.5px;
     text-shadow: 0 2px 16px #1e88e533;
