@@ -33,26 +33,31 @@ const Dashboard: React.FC<DashboardProps> = () => {
         setMounted(true);
     }, []);
 
-    useEffect(() => {
-        const fetchInitial = async () => {
-            try {
-                setLoading(true);
-                const response = await fetch(`/api/pastes?page=1&limit=${limit}`);
-                if (response.ok) {
-                    const body = await response.json();
-                    const items: Paste[] = body.items || [];
-                    setPastes(items);
-                    setFilteredPastes(items);
-                    if (typeof body.total === 'number' && body.total >= 0) setTotal(body.total);
-                    // prefer token if backend provides it
-                    setNextToken(body.nextPageToken ?? null);
-                }
-                } finally {
-                setLoading(false);
+    // Fetch paged pastes; force bypasses server-side cache when needed.
+    const fetchPastes = async (force = false) => {
+        try {
+            if (!force) setLoading(true);
+            const forceParam = force ? '&force=1' : '';
+            const response = await fetch(`/api/pastes?page=1&limit=${limit}${forceParam}`);
+            if (response.ok) {
+                const body = await response.json();
+                const items: Paste[] = body.items || [];
+                setPastes(items);
+                setFilteredPastes(items);
+                if (typeof body.total === 'number' && body.total >= 0) setTotal(body.total);
+                setNextToken(body.nextPageToken ?? null);
             }
-        };
-        fetchInitial();
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchPastes(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [limit]);
+
+    // Polling removed — dashboard relies on BroadcastChannel for real-time updates.
 
     useEffect(() => {
         // Filtrar los pastes según el término de búsqueda
@@ -110,6 +115,50 @@ const Dashboard: React.FC<DashboardProps> = () => {
         return () => obs.disconnect();
     }, [sentinelRef.current, loadingMore, pastes.length, total, nextToken]);
 
+    // Listen for BroadcastChannel messages from other tabs and refresh quickly.
+    // If BroadcastChannel is not available, fall back to light polling every 30s.
+    useEffect(() => {
+        let cleanup: (() => void) | undefined;
+        let fallbackInterval: number | null = null;
+        // dynamic import to avoid SSR issues
+        import('../utils/broadcast')
+            .then((mod) => {
+                try {
+                    const bc = mod.getBroadcastChannel();
+                    if (bc) {
+                        cleanup = mod.listen(async (msg) => {
+                            if (!msg) return;
+                            if (msg.type === 'paste_created' || msg.type === 'paste_deleted' || msg.type === 'paste_renamed') {
+                                // quick forced fetch to update UI
+                                await fetchPastes(true);
+                            }
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    // ignore and start fallback
+                }
+                // BroadcastChannel not available: start fallback polling every 30s
+                fallbackInterval = window.setInterval(async () => {
+                    if (document.visibilityState === 'hidden') return;
+                    await fetchPastes(true);
+                }, 30000);
+            })
+            .catch(() => {
+                // import failed: start fallback polling
+                fallbackInterval = window.setInterval(async () => {
+                    if (document.visibilityState === 'hidden') return;
+                    await fetchPastes(true);
+                }, 30000);
+            });
+
+        return () => {
+            if (cleanup) cleanup();
+            if (fallbackInterval) clearInterval(fallbackInterval);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     interface Paste {
         id: string;
         name: string;
@@ -123,6 +172,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
         if (response.ok) {
             setPastes(pastes.filter((paste) => paste.id !== id));
             addNotification('Paste deleted successfully.');
+            try {
+                const { postMessage } = await import('../utils/broadcast');
+                postMessage({ type: 'paste_deleted', id });
+            } catch (err) {}
         } else {
             addNotification('Failed to delete paste.');
         }
@@ -151,6 +204,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
             setPastes((prev) => prev.map((p) => (p.id === renameTargetId ? { ...p, name: renameValue } : p)));
             addNotification('Name updated successfully.');
             handleCancelRename();
+            try {
+                const { postMessage } = await import('../utils/broadcast');
+                postMessage({ type: 'paste_renamed', id: renameTargetId, name: renameValue });
+            } catch (err) {}
         } else {
             addNotification('Failed to update name.');
         }

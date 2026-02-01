@@ -37,6 +37,12 @@ const Editor = () => {
 
         if (response.ok) {
             const data = await response.json();
+            // notify other tabs about the new paste (if supported) before navigating
+            try {
+                // lazy import to avoid SSR issues
+                const { postMessage } = await import('../utils/broadcast');
+                postMessage({ type: 'paste_created', paste: { id: data.id, name, permanent: isPermanent, createdAt: new Date().toISOString() } });
+            } catch (err) {}
             const url = `/${data.id}`;
             window.location.href = url; // Redirect to the preview page
         } else {
