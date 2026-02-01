@@ -28,6 +28,9 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [deletePayload, setDeletePayload] = useState<any>(null);
     const [confirmStage, setConfirmStage] = useState(0);
+    const [previewItems, setPreviewItems] = useState<any[]>([]);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [showPreviewList, setShowPreviewList] = useState(false);
     const sentinelRef = React.useRef<HTMLDivElement | null>(null);
     // simpler: always render fallback list
 
@@ -106,6 +109,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
             (entries) => {
                 entries.forEach((entry) => {
                     if (entry.isIntersecting && !loadingMore) {
+                        // If there are no pastes at all, don't repeatedly trigger loadMore.
+                        if (total === 0 && pastes.length === 0) return;
                         // if total is known and we've loaded all, do nothing
                         if (total > 0 && pastes.length >= total) return;
                         if (nextToken === null && total > 0 && pastes.length >= total) return;
@@ -162,6 +167,53 @@ const Dashboard: React.FC<DashboardProps> = () => {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Debounced preview fetch for filtered delete modal
+    useEffect(() => {
+        if (!showDeleteModal || !deletePayload || deletePayload.mode !== 'filtered' || confirmStage !== 1) return;
+        let mounted = true;
+        let timer: number | undefined;
+        const doPreview = async () => {
+            try {
+                setPreviewLoading(true);
+                const q = deletePayload.filter || '';
+                const response = await fetch(`/api/pastes?page=1&limit=1000&force=1`);
+                if (!response.ok) {
+                    if (mounted) addNotification('Failed to preview matches.');
+                    return;
+                }
+                const body = await response.json();
+                const allItems: any[] = body.items || [];
+                const ff = deletePayload.filterField || 'all';
+                let matched = allItems.filter((p) => {
+                    if (!q) return true;
+                    const low = q.toLowerCase();
+                    if (ff === 'name') return (p.name || '').toLowerCase().includes(low);
+                    if (ff === 'content') return (p.content || '').toLowerCase().includes(low);
+                    if (ff === 'id') return (p.id || '').toLowerCase().includes(low);
+                    return (
+                        (p.name || '').toLowerCase().includes(low) ||
+                        (p.content || '').toLowerCase().includes(low) ||
+                        (p.id || '').toLowerCase().includes(low)
+                    );
+                });
+                if (!mounted) return;
+                setPreviewItems(matched);
+                setDeletePayload((p: any) => ({ ...p, previewCount: matched.length }));
+            } catch (err) {
+                if (mounted) addNotification('Preview failed.');
+            } finally {
+                if (mounted) setPreviewLoading(false);
+            }
+        };
+        // debounce 300ms
+        timer = window.setTimeout(doPreview, 300);
+        return () => {
+            mounted = false;
+            if (timer) clearTimeout(timer);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [deletePayload?.filter, deletePayload?.filterField, showDeleteModal, confirmStage]);
 
     interface Paste {
         id: string;
@@ -221,6 +273,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
             body.ids = Array.from(selectedIds);
         } else if (deletePayload.mode === 'filtered') {
             body.filter = deletePayload.filter || '';
+            if (deletePayload.filterField) body.filterField = deletePayload.filterField;
             body.type = 'all';
         } else if (deletePayload.mode === 'permanent' || deletePayload.mode === 'temporary' || deletePayload.mode === 'all') {
             body.type = deletePayload.mode === 'temporary' ? 'temporary' : deletePayload.mode;
@@ -372,46 +425,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     Logout
                 </button>
             </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 56, marginBottom: 16 }}>
-                <button
-                    onClick={() => openDeleteModal({ mode: 'all' })}
-                    style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                >
-                    Delete All
-                </button>
-                <button
-                    onClick={() => openDeleteModal({ mode: 'permanent' })}
-                    style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                >
-                    Delete Permanent
-                </button>
-                <button
-                    onClick={() => openDeleteModal({ mode: 'temporary' })}
-                    style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                >
-                    Delete Temporary
-                </button>
-                <button
-                    onClick={() => openDeleteModal({ mode: 'filtered', filter: searchTerm })}
-                    style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                >
-                    Delete Filtered
-                </button>
-                <button
-                    onClick={() => openDeleteModal({ mode: 'selected' })}
-                    disabled={selectedIds.size === 0}
-                    style={{
-                        backgroundColor: selectedIds.size === 0 ? '#333' : '#722ed1',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: 6,
-                        padding: '8px 12px',
-                        cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
-                    }}
-                >
-                    Delete Selected ({selectedIds.size})
-                </button>
-            </div>
+            {/* Buttons moved inside the card under the "Pastes" title */}
             {/* Campo de búsqueda */}
             <div style={{ marginBottom: '20px' }}>
                 <input
@@ -473,6 +487,46 @@ const Dashboard: React.FC<DashboardProps> = () => {
             <div className="dashboard-content">
                 <div className="card">
                     <h1 className="card-title">Pastes</h1>
+                    <div style={{ display: 'flex', gap: 10, marginTop: 12, marginBottom: 8 }}>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'all' })}
+                            style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                            Delete All
+                        </button>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'permanent' })}
+                            style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                            Delete Permanent
+                        </button>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'temporary' })}
+                            style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                            Delete Temporary
+                        </button>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'filtered', filter: searchTerm })}
+                            style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                            Delete Filtered
+                        </button>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'selected' })}
+                            disabled={selectedIds.size === 0}
+                            style={{
+                                backgroundColor: selectedIds.size === 0 ? '#333' : '#722ed1',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: 6,
+                                padding: '8px 12px',
+                                cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
+                            }}
+                        >
+                            Delete Selected ({selectedIds.size})
+                        </button>
+                    </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222', fontWeight: 700, alignItems: 'center' }}>
                         <div>
                             <input
@@ -631,7 +685,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             backgroundColor: '#0f0f0f',
                             padding: '24px',
                             borderRadius: '8px',
-                            width: '520px',
+                            width: '560px',
                             boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
                             color: '#e6e6e6',
                         }}
@@ -644,6 +698,103 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                 ? `You are about to delete ${deletePayload.mode === 'selected' ? selectedIds.size : deletePayload.mode === 'filtered' ? 'filtered items' : deletePayload.mode} items. This action is irreversible.`
                                 : 'This is the final confirmation. Type DELETE to confirm permanently.'}
                         </p>
+
+                        {/* Filter options for "filtered" mode */}
+                        {deletePayload.mode === 'filtered' && confirmStage === 1 && (
+                            <div style={{ marginBottom: 12 }}>
+                                <div style={{ marginBottom: 8, color: '#ddd' }}>Filter by:</div>
+                                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                                    <label style={{ color: '#ccc' }}>
+                                        <input
+                                            type="radio"
+                                            name="filterField"
+                                            checked={(deletePayload.filterField || 'all') === 'all'}
+                                            onChange={() => setDeletePayload((p: any) => ({ ...p, filterField: 'all' }))}
+                                        />{' '}
+                                        Any
+                                    </label>
+                                    <label style={{ color: '#ccc' }}>
+                                        <input
+                                            type="radio"
+                                            name="filterField"
+                                            checked={(deletePayload.filterField || '') === 'name'}
+                                            onChange={() => setDeletePayload((p: any) => ({ ...p, filterField: 'name' }))}
+                                        />{' '}
+                                        Name
+                                    </label>
+                                    <label style={{ color: '#ccc' }}>
+                                        <input
+                                            type="radio"
+                                            name="filterField"
+                                            checked={(deletePayload.filterField || '') === 'content'}
+                                            onChange={() => setDeletePayload((p: any) => ({ ...p, filterField: 'content' }))}
+                                        />{' '}
+                                        Content
+                                    </label>
+                                    <label style={{ color: '#ccc' }}>
+                                        <input
+                                            type="radio"
+                                            name="filterField"
+                                            checked={(deletePayload.filterField || '') === 'id'}
+                                            onChange={() => setDeletePayload((p: any) => ({ ...p, filterField: 'id' }))}
+                                        />{' '}
+                                        ID
+                                    </label>
+                                </div>
+                                <input
+                                    value={deletePayload.filter || ''}
+                                    onChange={(e) => setDeletePayload((p: any) => ({ ...p, filter: e.target.value }))}
+                                    placeholder="Filter text (e.g. part of name)"
+                                    style={{ width: '100%', padding: '10px', borderRadius: 6, marginBottom: 8, background: '#1a1a1a', border: '1px solid #333', color: '#fff' }}
+                                />
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                    <button
+                                        onClick={async () => {
+                                            // manual preview trigger: fetch and show list
+                                            try {
+                                                setPreviewLoading(true);
+                                                const q = deletePayload.filter || '';
+                                                const response = await fetch(`/api/pastes?page=1&limit=1000&force=1`);
+                                                if (!response.ok) {
+                                                    addNotification('Failed to preview matches.');
+                                                    setPreviewLoading(false);
+                                                    return;
+                                                }
+                                                const body = await response.json();
+                                                const allItems: any[] = body.items || [];
+                                                const ff = deletePayload.filterField || 'all';
+                                                let matched = allItems.filter((p) => {
+                                                    if (!q) return true;
+                                                    const low = q.toLowerCase();
+                                                    if (ff === 'name') return (p.name || '').toLowerCase().includes(low);
+                                                    if (ff === 'content') return (p.content || '').toLowerCase().includes(low);
+                                                    if (ff === 'id') return (p.id || '').toLowerCase().includes(low);
+                                                    return (
+                                                        (p.name || '').toLowerCase().includes(low) ||
+                                                        (p.content || '').toLowerCase().includes(low) ||
+                                                        (p.id || '').toLowerCase().includes(low)
+                                                    );
+                                                });
+                                                setPreviewItems(matched);
+                                                setDeletePayload((p: any) => ({ ...p, previewCount: matched.length }));
+                                                setShowPreviewList(true);
+                                            } catch (err) {
+                                                addNotification('Preview failed.');
+                                            } finally {
+                                                setPreviewLoading(false);
+                                            }
+                                        }}
+                                        style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Preview matches
+                                    </button>
+                                    <div style={{ color: '#ccc' }}>
+                                        {deletePayload.previewCount != null ? `${deletePayload.previewCount} matches` : 'No preview yet'}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {confirmStage === 2 && (
                             <input
                                 value={deletePayload.confirmText || ''}
@@ -681,6 +832,34 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                 </button>
                             )}
                         </div>
+                        {/* Preview list */}
+                        {showPreviewList && previewItems && (
+                            <div style={{ marginTop: 16, maxHeight: 240, overflow: 'auto', borderTop: '1px solid #222', paddingTop: 12 }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, padding: '6px 8px', fontWeight: 700, borderBottom: '1px solid #222' }}>
+                                    <div>Name</div>
+                                    <div>UUID</div>
+                                    <div>Permanent</div>
+                                </div>
+                                {previewLoading ? (
+                                    <div style={{ padding: 12, color: '#ccc' }}>Loading...</div>
+                                ) : previewItems.length === 0 ? (
+                                    <div style={{ padding: 12, color: '#999' }}>No matches</div>
+                                ) : (
+                                    previewItems.map((p) => (
+                                        <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
+                                            <div>{p.name}</div>
+                                            <div style={{ color: 'blue', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { navigator.clipboard?.writeText(p.id); addNotification('UUID copied'); }}>
+                                                {p.id}
+                                            </div>
+                                            <div>{String(p.permanent) === 'true' || p.permanent === true ? 'Yes' : 'No'}</div>
+                                        </div>
+                                    ))
+                                )}
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                                    <button onClick={() => setShowPreviewList(false)} style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6 }}>Close preview</button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

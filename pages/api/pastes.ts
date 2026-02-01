@@ -79,9 +79,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (filter && filter.trim()) {
           const q = filter.toLowerCase();
-          toDeleteIds = all
-            .filter((p: any) => (p.name || '').toLowerCase().includes(q) || (p.content || '').toLowerCase().includes(q) || (p.id || '').toLowerCase().includes(q))
-            .map((p: any) => p.id);
+          const field = (body.filterField as string) || (req.query.filterField as string) || 'all';
+          if (field === 'name') {
+            toDeleteIds = all.filter((p: any) => (p.name || '').toLowerCase().includes(q)).map((p: any) => p.id);
+          } else if (field === 'content') {
+            toDeleteIds = all.filter((p: any) => (p.content || '').toLowerCase().includes(q)).map((p: any) => p.id);
+          } else if (field === 'id') {
+            toDeleteIds = all.filter((p: any) => (p.id || '').toLowerCase().includes(q)).map((p: any) => p.id);
+          } else {
+            toDeleteIds = all
+              .filter((p: any) => (p.name || '').toLowerCase().includes(q) || (p.content || '').toLowerCase().includes(q) || (p.id || '').toLowerCase().includes(q))
+              .map((p: any) => p.id);
+          }
         }
       }
 
