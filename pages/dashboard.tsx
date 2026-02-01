@@ -1133,25 +1133,21 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                 style={{ width: '100%', padding: '10px', borderRadius: 6, marginBottom: 12, background: '#1a1a1a', border: '1px solid #333', color: '#fff' }}
                             />
                         )}
-                        {/* Summary of items to be deleted (when present) */}
-                        {confirmStage === 2 && summaryItems && (
-                            <div style={{ marginTop: 12, maxHeight: 220, overflowY: 'auto', border: '1px solid #222', padding: 8, borderRadius: 6 }}>
-                                <div style={{ fontWeight: 700, marginBottom: 8 }}>Summary (sample)</div>
+                        {/* Summary: count and note only (no box, no sample list) */}
+                        {confirmStage === 2 && (
+                            <div style={{ marginTop: 12, color: '#bbb', fontSize: 12 }}>
                                 {summaryLoading ? (
-                                    <div style={{ color: '#ccc' }}>Loading...</div>
-                                ) : summaryItems.length === 0 ? (
-                                    <div style={{ color: '#999' }}>No items in sample.</div>
+                                    <span>Loading...</span>
                                 ) : (
-                                    summaryItems.map((s) => (
-                                        <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '6px 4px', borderBottom: '1px solid #111' }}>
-                                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
-                                            <div style={{ color: '#aaa' }}>{s.id}</div>
-                                        </div>
-                                    ))
+                                    <>
+                                        {(deletePayload?.summaryTotal ?? 0) > 0 && (
+                                            <div style={{ marginBottom: 6, color: '#ddd' }}>
+                                                <strong>{deletePayload.summaryTotal}</strong> item{(deletePayload.summaryTotal ?? 0) === 1 ? '' : 's'} will be deleted.
+                                            </div>
+                                        )}
+                                        Showing up to 200 sample items. The actual deletion may affect more items.
+                                    </>
                                 )}
-                                <div style={{ marginTop: 8, color: '#bbb', fontSize: 12 }}>
-                                    Showing up to 200 sample items. The actual deletion may affect more items.
-                                </div>
                             </div>
                         )}
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
@@ -1175,6 +1171,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                             }
                                             const body = await res.json();
                                             setSummaryItems(body.items || []);
+                                            setDeletePayload((p: any) => ({ ...p, summaryTotal: body.total }));
                                             setConfirmStage(2);
                                         } catch (err) {
                                             addNotification('Failed to fetch summary.');
@@ -1253,25 +1250,31 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         const start = (previewPage - 1) * previewPageSize;
                                         const pageItems = previewItems.slice(start, start + previewPageSize);
                                         return pageItems.map((p) => (
-                                            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
+                                            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: confirmStage === 2 ? '2fr 3fr 1fr' : '2fr 3fr 1fr minmax(80px, auto)', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
                                                 <div>{p.name}</div>
                                                 <div style={{ color: 'blue', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { navigator.clipboard?.writeText(p.id); addNotification('UUID copied'); }}>
                                                     {p.id}
                                                 </div>
                                                 <div>{String(p.permanent) === 'true' || p.permanent === true ? 'Yes' : 'No'}</div>
-                                                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                                                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                        <input type="checkbox" checked={previewSelectedIds.has(p.id)} onChange={() => {
-                                                            setPreviewSelectedIds(prev => {
-                                                                const copy = new Set(prev);
-                                                                if (copy.has(p.id)) copy.delete(p.id);
-                                                                else copy.add(p.id);
-                                                                return copy;
-                                                            });
-                                                        }} />
-                                                        <span style={{ color: '#ccc' }}>Select</span>
-                                                    </label>
-                                                </div>
+                                                {confirmStage !== 2 && (
+                                                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                                        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={previewSelectedIds.has(p.id)}
+                                                                onChange={() => {
+                                                                    setPreviewSelectedIds(prev => {
+                                                                        const copy = new Set(prev);
+                                                                        if (copy.has(p.id)) copy.delete(p.id);
+                                                                        else copy.add(p.id);
+                                                                        return copy;
+                                                                    });
+                                                                }}
+                                                            />
+                                                            <span style={{ color: '#ccc' }}>Select</span>
+                                                        </label>
+                                                    </div>
+                                                )}
                                             </div>
                                         ));
                                     })()
@@ -1280,54 +1283,68 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                     <div style={{ color: '#ccc' }}>{deletePayload.previewCount || previewItems.length} total</div>
                                     <div style={{ display: 'flex', gap: 8 }}>
                                         {/* Close preview button removed */}
-                                        <button
-                                            title="Adds the items you've checked in this preview to the dashboard 'Selected' list above"
-                                            onClick={() => {
-                                                // add selected preview ids to global selected
-                                                setSelectedIds(prev => {
-                                                    const copy = new Set(prev);
-                                                    for (const id of previewSelectedIds) copy.add(id);
-                                                    return copy;
-                                                });
-                                                addNotification(`${previewSelectedIds.size} items added to Selected.`);
-                                            }}
-                                            style={{ background: '#722ed1', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6, marginLeft: 8 }}
-                                        >
-                                            Add preview picks to Selected ({previewSelectedIds.size})
-                                        </button>
-                                        <button
-                                            type="button"
-                                            aria-label="Help: add preview picks"
-                                            onMouseEnter={(e) =>
-                                                showTooltip(e as unknown as React.MouseEvent<HTMLButtonElement>, 'Adds checked preview rows to the dashboard selection above.')
-                                            }
-                                            onMouseLeave={hideTooltip}
-                                            onFocus={(e) => showTooltip(e as unknown as React.MouseEvent<HTMLButtonElement>, 'Adds checked preview rows to the dashboard selection above.')}
-                                            onBlur={hideTooltip}
-                                            onTouchStart={(e) => {
-                                                showTooltip(e as any, 'Adds checked preview rows to the dashboard selection above.', true);
-                                            }}
-                                            onTouchEnd={() => {
-                                                setTimeout(hideTooltip, 2200);
-                                            }}
-                                            style={{
-                                                background: 'transparent',
-                                                border: '1px solid rgba(255,255,255,0.06)',
-                                                color: '#999',
-                                                borderRadius: 999,
-                                                width: 20,
-                                                height: 20,
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                fontSize: 12,
-                                                cursor: 'help',
-                                                alignSelf: 'center',
-                                            }}
-                                        >
-                                            ?
-                                        </button>
-                                        {/* Continue to final confirmation button removed — use "Yes, continue" above */}
+                                        {confirmStage !== 2 && (
+                                            <>
+                                                <button
+                                                    title="Adds the items you've checked in this preview to the dashboard 'Selected' list above"
+                                                    onClick={() => {
+                                                        // add selected preview ids to global selected
+                                                        setSelectedIds((prev) => {
+                                                            const copy = new Set(prev);
+                                                            for (const id of previewSelectedIds) copy.add(id);
+                                                            return copy;
+                                                        });
+                                                        addNotification(`${previewSelectedIds.size} items added to Selected.`);
+                                                    }}
+                                                    style={{
+                                                        background: '#722ed1',
+                                                        color: '#fff',
+                                                        border: 'none',
+                                                        padding: '6px 10px',
+                                                        borderRadius: 6,
+                                                        marginLeft: 8,
+                                                        cursor: 'pointer',
+                                                    }}
+                                                >
+                                                    Add preview picks to Selected ({previewSelectedIds.size})
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    aria-label="Help: add preview picks"
+                                                    onMouseEnter={(e) =>
+                                                        showTooltip(e as unknown as React.MouseEvent<HTMLButtonElement>, 'Adds checked preview rows to the dashboard selection above.')
+                                                    }
+                                                    onMouseLeave={hideTooltip}
+                                                    onFocus={(e) =>
+                                                        showTooltip(e as unknown as React.MouseEvent<HTMLButtonElement>, 'Adds checked preview rows to the dashboard selection above.')
+                                                    }
+                                                    onBlur={hideTooltip}
+                                                    onTouchStart={(e) => {
+                                                        showTooltip(e as any, 'Adds checked preview rows to the dashboard selection above.', true);
+                                                    }}
+                                                    onTouchEnd={() => {
+                                                        setTimeout(hideTooltip, 2200);
+                                                    }}
+                                                    style={{
+                                                        background: 'transparent',
+                                                        border: '1px solid rgba(255,255,255,0.06)',
+                                                        color: '#999',
+                                                        borderRadius: 999,
+                                                        width: 20,
+                                                        height: 20,
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        fontSize: 12,
+                                                        cursor: 'help',
+                                                        alignSelf: 'center',
+                                                    }}
+                                                >
+                                                    ?
+                                                </button>
+                                            </>
+                                        )}
+                                        {/* Continue to final confirmation button removed — use "Preview sample & continue" above */}
                                     </div>
                                 </div>
                             </div>
