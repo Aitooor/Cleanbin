@@ -24,7 +24,45 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [loading, setLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
     const [nextToken, setNextToken] = useState<string | null | undefined>(undefined);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [deletePayload, setDeletePayload] = useState<any>(null);
+    const [confirmStage, setConfirmStage] = useState(0);
+    const [previewItems, setPreviewItems] = useState<any[]>([]);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [showPreviewList, setShowPreviewList] = useState(false);
+    const [previewPage, setPreviewPage] = useState(1);
+    const [previewPageSize, setPreviewPageSize] = useState(10);
     const sentinelRef = React.useRef<HTMLDivElement | null>(null);
+    const [previewSelectedIds, setPreviewSelectedIds] = useState<Set<string>>(new Set());
+    const [summaryItems, setSummaryItems] = useState<any[]>([]);
+    const [summaryLoading, setSummaryLoading] = useState(false);
+    const [isMobileLayout, setIsMobileLayout] = useState(false);
+    const [showStayOrCloseAfterPicks, setShowStayOrCloseAfterPicks] = useState(false);
+    const [addedPicksCount, setAddedPicksCount] = useState(0);
+    const [addedFromPreviewIds, setAddedFromPreviewIds] = useState<Set<string>>(new Set());
+    const [tooltipState, setTooltipState] = useState<{ visible: boolean; text: string; left: number; top: number }>({
+        visible: false,
+        text: '',
+        left: 0,
+        top: 0,
+    });
+
+    const showTooltip = (e: any, text: string, center = false) => {
+        if (center) {
+            const left = window.innerWidth / 2 - 160;
+            const top = window.innerHeight / 2 - 40;
+            setTooltipState({ visible: true, text, left, top });
+            return;
+        }
+        const rect = (e.target as HTMLElement).getBoundingClientRect();
+        const left = Math.max(8, rect.left);
+        const top = rect.bottom + 8;
+        setTooltipState({ visible: true, text, left, top });
+    };
+    const hideTooltip = () => {
+        setTooltipState((s) => ({ ...s, visible: false }));
+    };
     // simpler: always render fallback list
 
     // no dynamic import
@@ -102,6 +140,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
             (entries) => {
                 entries.forEach((entry) => {
                     if (entry.isIntersecting && !loadingMore) {
+                        // If there are no pastes at all, don't repeatedly trigger loadMore.
+                        if (total === 0 && pastes.length === 0) return;
                         // if total is known and we've loaded all, do nothing
                         if (total > 0 && pastes.length >= total) return;
                         if (nextToken === null && total > 0 && pastes.length >= total) return;
@@ -159,6 +199,129 @@ const Dashboard: React.FC<DashboardProps> = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Debounced preview fetch for filtered delete modal
+    useEffect(() => {
+        if (!showDeleteModal || !deletePayload || deletePayload.mode !== 'filtered' || confirmStage !== 1) return;
+        let mounted = true;
+        let timer: number | undefined;
+        // reset to first page when filter changes
+        setPreviewPage(1);
+        const doPreview = async () => {
+            try {
+                setPreviewLoading(true);
+                const q = deletePayload.filter || '';
+                const response = await fetch(`/api/pastes?page=1&limit=1000&force=1`);
+                if (!response.ok) {
+                    if (mounted) addNotification('Failed to preview matches.');
+                    return;
+                }
+                const body = await response.json();
+                const allItems: any[] = body.items || [];
+                let matched: any[] = [];
+
+                // If structured rules are present, apply them client-side (supports regex, negate, ops)
+                const rules = Array.isArray(deletePayload.filterRules) ? deletePayload.filterRules : [];
+                const matchMode = (deletePayload.matchMode || 'AND').toUpperCase();
+                if (rules && rules.length > 0) {
+                    const applyRule = (r: any, item: any) => {
+                        const val = ('' + (r.value || '')).toLowerCase();
+                        const fieldVal =
+                            r.field === 'name' ? (item.name || '') : r.field === 'content' ? (item.content || '') : r.field === 'id' ? (item.id || '') : (item.name || '') + ' ' + (item.content || '') + ' ' + (item.id || '');
+                        const fv = ('' + fieldVal).toLowerCase();
+                        let matchedRule = false;
+                        if (r.op === 'contains') matchedRule = fv.includes(val);
+                        else if (r.op === 'exact') matchedRule = fv === val;
+                        else if (r.op === 'starts') matchedRule = fv.startsWith(val);
+                        else if (r.op === 'regex') {
+                            try {
+                                const re = new RegExp(r.value, 'i');
+                                matchedRule = re.test(fieldVal);
+                            } catch (e) {
+                                matchedRule = false;
+                            }
+                        }
+                        return r.negate ? !matchedRule : matchedRule;
+                    };
+                    matched = allItems.filter((item) => {
+                        const results = rules.map((r: any) => applyRule(r, item));
+                        if (matchMode === 'OR') return results.some(Boolean);
+                        return results.every(Boolean);
+                    });
+                } else {
+                    // fallback: simple token-based parsing (commas, field:value, negation, phrases)
+                    const ff = (deletePayload.filterField || 'all');
+                    const parsePredicate = (filterStr: string) => {
+                        const tokens: string[] = [];
+                        for (const part of filterStr.split(',')) {
+                            const t = part.trim();
+                            if (!t) continue;
+                            tokens.push(t);
+                        }
+                        return (p: any) => {
+                            if (tokens.length === 0) return true;
+                            return tokens.every((tok) => {
+                                let negate = false;
+                                let token = tok;
+                                if (token.startsWith('-')) {
+                                    negate = true;
+                                    token = token.slice(1);
+                                }
+                                const colonIdx = token.indexOf(':');
+                                let field = 'any';
+                                let value = token;
+                                if (colonIdx > 0) {
+                                    field = token.slice(0, colonIdx).toLowerCase();
+                                    value = token.slice(colonIdx + 1);
+                                }
+                                const valLower = value.replace(/^"(.*)"$/, '$1').toLowerCase();
+                                const matchField = (fval: any) => ('' + (fval || '')).toLowerCase().includes(valLower);
+                                let matchedField = false;
+                                if (field === 'name') matchedField = matchField(p.name);
+                                else if (field === 'content') matchedField = matchField(p.content);
+                                else if (field === 'id') matchedField = matchField(p.id);
+                                else {
+                                    matchedField = matchField(p.name) || matchField(p.content) || matchField(p.id);
+                                }
+                                return negate ? !matchedField : matchedField;
+                            });
+                        };
+                    };
+                    const predicate = parsePredicate(q || '');
+                    matched = allItems.filter((p) => {
+                        if (!q) return true;
+                        return predicate(p);
+                    });
+                }
+                if (!mounted) return;
+                setPreviewItems(matched);
+                setDeletePayload((p: any) => ({ ...p, previewCount: matched.length }));
+            } catch (err) {
+                if (mounted) addNotification('Preview failed.');
+            } finally {
+                if (mounted) setPreviewLoading(false);
+            }
+        };
+        // debounce 300ms
+        timer = window.setTimeout(doPreview, 300);
+        return () => {
+            mounted = false;
+            if (timer) clearTimeout(timer);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [deletePayload?.filter, deletePayload?.filterField, deletePayload?.filterRules, deletePayload?.matchMode, showDeleteModal, confirmStage]);
+
+    // responsive layout detection for mobile-friendly inputs
+    useEffect(() => {
+        const onResize = () => setIsMobileLayout(window.innerWidth < 600);
+        if (typeof window !== 'undefined') {
+            onResize();
+            window.addEventListener('resize', onResize);
+        }
+        return () => {
+            if (typeof window !== 'undefined') window.removeEventListener('resize', onResize);
+        };
+    }, []);
+
     interface Paste {
         id: string;
         name: string;
@@ -178,6 +341,117 @@ const Dashboard: React.FC<DashboardProps> = () => {
             } catch (err) {}
         } else {
             addNotification('Failed to delete paste.');
+        }
+    };
+
+    const toggleSelect = (id: string) => {
+        setSelectedIds((prev) => {
+            const copy = new Set(prev);
+            if (copy.has(id)) copy.delete(id);
+            else copy.add(id);
+            return copy;
+        });
+    };
+
+    const selectAllFiltered = (checked: boolean) => {
+        if (checked) {
+            setSelectedIds(new Set(filteredPastes.map((p) => p.id)));
+        } else {
+            setSelectedIds(new Set());
+        }
+    };
+
+    const openDeleteModal = (payload: any) => {
+        // ensure each rule has a stable uid so Remove can always identify it
+        const rules = (payload?.filterRules || []).map((r: any) => ({
+            ...(r || {}),
+            uid: r?.uid || `${Date.now()}-${Math.random()}`,
+            regexValid: typeof r?.regexValid === 'boolean' ? r.regexValid : true,
+            regexError: r?.regexError || '',
+        }));
+        const initial = {
+            ...(payload || {}),
+            filterRules: rules,
+            matchMode: payload?.matchMode || 'AND',
+            filter: payload?.filter || '',
+        };
+        setDeletePayload(initial);
+        setConfirmStage(1);
+        setShowDeleteModal(true);
+        // initialize preview/selection state
+        setPreviewItems([]);
+        setPreviewSelectedIds(new Set());
+        setPreviewPage(1);
+        setPreviewPageSize(10);
+        setAddedFromPreviewIds(new Set());
+    };
+
+    const closeDeleteModal = () => {
+        setShowDeleteModal(false);
+        setDeletePayload(null);
+        setConfirmStage(0);
+        setShowStayOrCloseAfterPicks(false);
+        setAddedFromPreviewIds(new Set());
+    };
+
+    const closeDeleteModalKeepingData = () => {
+        setShowDeleteModal(false);
+        setConfirmStage(0);
+        setShowStayOrCloseAfterPicks(false);
+    };
+
+    const performBulkDelete = async () => {
+        if (!deletePayload) return;
+        const body: any = {};
+        if (deletePayload.mode === 'selected') {
+            body.ids = Array.from(selectedIds);
+        } else if (deletePayload.mode === 'filtered') {
+            body.filter = deletePayload.filter || '';
+            if (deletePayload.filterField) body.filterField = deletePayload.filterField;
+            if (deletePayload.filterRules) body.filterRules = deletePayload.filterRules;
+            if (deletePayload.matchMode) body.matchMode = deletePayload.matchMode;
+            body.type = 'all';
+        } else if (deletePayload.mode === 'permanent' || deletePayload.mode === 'temporary' || deletePayload.mode === 'all') {
+            body.type = deletePayload.mode === 'temporary' ? 'temporary' : deletePayload.mode;
+        }
+        try {
+            const res = await fetch('/api/pastes', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (res.ok) {
+                const data = await res.json();
+                // remove deleted ids locally if provided, otherwise refresh
+                if (data.ids && Array.isArray(data.ids)) {
+                    const deletedIds: string[] = data.ids;
+                    setPastes((prev) => prev.filter((p) => !deletedIds.includes(p.id)));
+                    setSelectedIds((prev) => {
+                        const copy = new Set(prev);
+                        for (const id of deletedIds) copy.delete(id);
+                        return copy;
+                    });
+                } else {
+                    // fallback: refetch
+                    await fetchPastes(true);
+                }
+                addNotification(`Deleted ${data.deleted || 0} pastes.`);
+                // broadcast local change as well
+                try {
+                    const { postMessage } = await import('../utils/broadcast');
+                    if (data.ids && Array.isArray(data.ids)) {
+                        postMessage({ type: 'pastes_bulk_deleted', ids: data.ids });
+                    } else {
+                        postMessage({ type: 'pastes_bulk_deleted', ids: [] });
+                    }
+                } catch (err) {}
+            } else {
+                addNotification('Failed to delete pastes.');
+            }
+        } catch (err) {
+            addNotification('Error deleting pastes.');
+        } finally {
+            closeDeleteModal();
         }
     };
 
@@ -287,6 +561,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     Logout
                 </button>
             </div>
+            {/* Buttons moved inside the card under the "Pastes" title */}
             {/* Campo de búsqueda */}
             <div style={{ marginBottom: '20px' }}>
                 <input
@@ -348,7 +623,67 @@ const Dashboard: React.FC<DashboardProps> = () => {
             <div className="dashboard-content">
                 <div className="card">
                     <h1 className="card-title">Pastes</h1>
-                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr 3fr', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222', fontWeight: 700 }}>
+                    <div style={{ display: 'flex', gap: 10, marginTop: 12, marginBottom: 8 }}>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'all' })}
+                            style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                            Delete All
+                        </button>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'permanent' })}
+                            style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                            Delete Permanent
+                        </button>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'temporary' })}
+                            style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                            Delete Temporary
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (!showDeleteModal && deletePayload?.mode === 'filtered') {
+                                    setShowDeleteModal(true);
+                                    setConfirmStage(1);
+                                    setShowStayOrCloseAfterPicks(false);
+                                    setPreviewItems([]);
+                                    setPreviewSelectedIds(new Set());
+                                    setPreviewPage(1);
+                                    setPreviewPageSize(10);
+                                } else {
+                                    openDeleteModal({ mode: 'filtered', filter: searchTerm });
+                                }
+                            }}
+                            style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                            Delete Filtered
+                        </button>
+                        <button
+                            onClick={() => openDeleteModal({ mode: 'selected' })}
+                            disabled={selectedIds.size === 0}
+                            style={{
+                                backgroundColor: selectedIds.size === 0 ? '#333' : '#722ed1',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: 6,
+                                padding: '8px 12px',
+                                cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
+                            }}
+                        >
+                            Delete Selected ({selectedIds.size})
+                        </button>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222', fontWeight: 700, alignItems: 'center' }}>
+                        <div>
+                            <input
+                                type="checkbox"
+                                onChange={(e) => selectAllFiltered(e.target.checked)}
+                                checked={filteredPastes.length > 0 && selectedIds.size === filteredPastes.length}
+                                aria-label="Select all filtered"
+                            />
+                        </div>
                         <div>Name</div>
                         <div>UUID</div>
                         <div>Permanent</div>
@@ -359,7 +694,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>No pastes to show</div>
                         ) : (
                             filteredPastes.map((paste) => (
-                                <div key={paste.id} style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr 3fr', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #111' }}>
+                                <div key={paste.id} style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #111' }}>
+                                    <div>
+                                        <input type="checkbox" checked={selectedIds.has(paste.id)} onChange={() => toggleSelect(paste.id)} />
+                                    </div>
                                     <div>{paste.name}</div>
                                     <div onClick={() => handleCopyToClipboard(paste.id)} style={{ cursor: 'pointer', color: 'blue', textDecoration: 'underline' }}>
                                         {paste.id}
@@ -474,6 +812,627 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             </button>
                         </div>
                     </div>
+                </div>
+            )}
+            {showDeleteModal && deletePayload && (
+                <div
+                    onClick={closeDeleteModal}
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        backgroundColor: 'rgba(0,0,0,0.6)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 3000,
+                    }}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                            position: 'relative',
+                            backgroundColor: '#0f0f0f',
+                            padding: '16px',
+                            borderRadius: '8px',
+                            width: 'min(96%, 720px)',
+                            maxHeight: '90vh',
+                            overflowY: 'auto',
+                            WebkitOverflowScrolling: 'touch',
+                            boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+                            color: '#e6e6e6',
+                        }}
+                    >
+                        <button
+                            aria-label="Close"
+                            onClick={closeDeleteModal}
+                            style={{
+                                position: 'absolute',
+                                right: 12,
+                                top: 12,
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#ccc',
+                                fontSize: 18,
+                                cursor: 'pointer',
+                            }}
+                        >
+                            ×
+                        </button>
+                        <h3 style={{ marginTop: 0 }}>
+                            {confirmStage === 1 ? 'Confirm deletion' : 'FINAL CONFIRMATION'}
+                        </h3>
+                        <p style={{ color: '#bbb' }}>
+                            {confirmStage === 1
+                                ? `You are about to delete ${deletePayload.mode === 'selected' ? selectedIds.size : deletePayload.mode === 'filtered' ? 'filtered items' : deletePayload.mode} items. This action is irreversible.`
+                                : 'This is the final confirmation. Type DELETE to confirm permanently.'}
+                        </p>
+
+                        {/* Advanced filter builder for "filtered" mode */}
+                        {deletePayload.mode === 'filtered' && confirmStage === 1 && (
+                            <div style={{ marginBottom: 12 }}>
+                                <div style={{ marginBottom: 8, color: '#ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                    <div>Filter builder</div>
+                                    <div style={{ color: '#ccc', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <div style={{ fontWeight: 600 }}>Combine rules</div>
+                                        <select
+                                            value={deletePayload.matchMode || 'AND'}
+                                            onChange={(e) => setDeletePayload((p: any) => ({ ...p, matchMode: e.target.value }))}
+                                            style={{ marginLeft: 6, background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: 4, padding: '4px 8px' }}
+                                        >
+                                            <option value="AND">All rules (AND)</option>
+                                            <option value="OR">Any rule (OR)</option>
+                                        </select>
+                                        <button
+                                            type="button"
+                                            aria-label="Help: combine rules"
+                                            onMouseEnter={(e) =>
+                                                showTooltip(
+                                                    e as unknown as React.MouseEvent<HTMLButtonElement>,
+                                                    'Combine rules: "All" requires every rule to match; "Any" requires at least one.'
+                                                )
+                                            }
+                                            onMouseLeave={hideTooltip}
+                                            onFocus={(e) =>
+                                                showTooltip(
+                                                    e as unknown as React.MouseEvent<HTMLButtonElement>,
+                                                    'Combine rules: "All" requires every rule to match; "Any" requires at least one.'
+                                                )
+                                            }
+                                            onBlur={hideTooltip}
+                                            onTouchStart={(e) => {
+                                                // show centered tooltip on touch devices
+                                                showTooltip(e as any, 'Combine rules: "All" requires every rule to match; "Any" requires at least one.', true);
+                                            }}
+                                            onTouchEnd={() => {
+                                                setTimeout(hideTooltip, 2200);
+                                            }}
+                                            style={{
+                                                background: 'transparent',
+                                                border: '1px solid rgba(255,255,255,0.06)',
+                                                color: '#999',
+                                                borderRadius: 999,
+                                                width: 20,
+                                                height: 20,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontSize: 12,
+                                                cursor: 'help',
+                                            }}
+                                        >
+                                            ?
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {(deletePayload.filterRules || []).map((rule: any, idx: number) => (
+                                    <div
+                                        key={rule.uid || idx}
+                                        style={{
+                                            display: 'flex',
+                                            gap: 8,
+                                            marginBottom: 8,
+                                            alignItems: 'center',
+                                            flexWrap: 'wrap',
+                                        }}
+                                    >
+                                        <select
+                                            value={rule.field || 'any'}
+                                            onChange={(e) =>
+                                                setDeletePayload((p: any) => {
+                                                    const rules = [...(p.filterRules || [])];
+                                                    const i = rules.findIndex((r: any) => (r.uid || '') === (rule.uid || ''));
+                                                    const pos = i !== -1 ? i : idx;
+                                                    rules[pos] = { ...rules[pos], field: e.target.value };
+                                                    return { ...p, filterRules: rules };
+                                                })
+                                            }
+                                            style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: 4, padding: '6px', minWidth: 90 }}
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            <option value="any">Any</option>
+                                            <option value="name">Name</option>
+                                            <option value="content">Content</option>
+                                            <option value="id">ID</option>
+                                        </select>
+                                        <select
+                                            value={rule.op || 'contains'}
+                                            onChange={(e) =>
+                                                setDeletePayload((p: any) => {
+                                                    const rules = [...(p.filterRules || [])];
+                                                    const i = rules.findIndex((r: any) => (r.uid || '') === (rule.uid || ''));
+                                                    const pos = i !== -1 ? i : idx;
+                                                    rules[pos] = { ...rules[pos], op: e.target.value };
+                                                    // reset regex validation when op changes
+                                                    if (e.target.value !== 'regex') {
+                                                        rules[pos].regexValid = true;
+                                                        rules[pos].regexError = '';
+                                                    }
+                                                    return { ...p, filterRules: rules };
+                                                })
+                                            }
+                                            style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: 4, padding: '6px', minWidth: 110 }}
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            <option value="contains">Contains</option>
+                                            <option value="exact">Exact</option>
+                                            <option value="starts">Starts with</option>
+                                            <option value="regex">Regex</option>
+                                        </select>
+                                        <input
+                                            value={rule.value || ''}
+                                            onChange={(e) =>
+                                                setDeletePayload((p: any) => {
+                                                    const rules = [...(p.filterRules || [])];
+                                                    const i = rules.findIndex((r: any) => (r.uid || '') === (rule.uid || ''));
+                                                    const pos = i !== -1 ? i : idx;
+                                                    const newVal = e.target.value;
+                                                    const newRule = { ...rules[pos], value: newVal };
+                                                    // validate regex if needed
+                                                    if (newRule.op === 'regex') {
+                                                        try {
+                                                            new RegExp(newVal);
+                                                            newRule.regexValid = true;
+                                                            newRule.regexError = '';
+                                                        } catch (err: any) {
+                                                            newRule.regexValid = false;
+                                                            newRule.regexError = err?.message || 'Invalid regex';
+                                                        }
+                                                    } else {
+                                                        newRule.regexValid = true;
+                                                        newRule.regexError = '';
+                                                    }
+                                                    rules[pos] = newRule;
+                                                    return { ...p, filterRules: rules };
+                                                })
+                                            }
+                                            placeholder='value (use quotes for phrases, prefix "-" to negate)'
+                                            style={{
+                                                flex: '1 1 200px',
+                                                minWidth: isMobileLayout ? '100%' : 200,
+                                                padding: '8px',
+                                                borderRadius: 6,
+                                                background: '#1a1a1a',
+                                                border: '1px solid #333',
+                                                color: '#fff',
+                                            }}
+                                            onClick={(e) => e.stopPropagation()}
+                                        />
+                                        {/* regex validation message */}
+                                        {rule.op === 'regex' && rule.regexValid === false && (
+                                            <div style={{ color: '#ff6b6b', fontSize: 12, marginLeft: 6 }}>{rule.regexError || 'Invalid regex'}</div>
+                                        )}
+                                        <label style={{ color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={!!rule.negate}
+                                                onChange={(e) =>
+                                                    setDeletePayload((p: any) => {
+                                                        const rules = [...(p.filterRules || [])];
+                                                        const i = rules.findIndex((r: any) => (r.uid || '') === (rule.uid || ''));
+                                                        const pos = i !== -1 ? i : idx;
+                                                        rules[pos] = { ...rules[pos], negate: e.target.checked };
+                                                        return { ...p, filterRules: rules };
+                                                    })
+                                                }
+                                            />
+                                            Negate
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setDeletePayload((p: any) => {
+                                                    const rules = [...(p.filterRules || [])];
+                                                    const uid = rule?.uid;
+                                                    let newRules;
+                                                    if (uid) {
+                                                        newRules = rules.filter((r) => r.uid !== uid);
+                                                    } else {
+                                                        const idxToRemove = rules.findIndex((r) => {
+                                                            return (
+                                                                r.field === rule.field &&
+                                                                r.op === rule.op &&
+                                                                (r.value || '') === (rule.value || '') &&
+                                                                (!!r.negate === !!rule.negate)
+                                                            );
+                                                        });
+                                                        if (idxToRemove !== -1) {
+                                                            rules.splice(idxToRemove, 1);
+                                                        }
+                                                        newRules = rules;
+                                                    }
+                                                    try {
+                                                        addNotification('Rule removed');
+                                                    } catch (e) {}
+                                                    return { ...p, filterRules: newRules };
+                                                });
+                                            }}
+                                            onPointerUp={(e) => {
+                                                // ensure pointer interactions also trigger removal on some devices
+                                                e.stopPropagation();
+                                            }}
+                                            style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 6, pointerEvents: 'auto' }}
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                ))}
+
+                                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                                    <button
+                                        onClick={() =>
+                                            setDeletePayload((p: any) => ({
+                                                ...p,
+                                                filterRules: [...(p.filterRules || []), { uid: `${Date.now()}-${Math.random()}`, field: 'any', op: 'contains', value: '', negate: false, regexValid: true, regexError: '' }],
+                                            }))
+                                        }
+                                        style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Add rule
+                                    </button>
+                                    <button
+                                        onClick={() => setDeletePayload((p: any) => ({ ...p, filterRules: [], previewCount: 0 }))}
+                                        style={{ backgroundColor: '#333', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Clear rules
+                                    </button>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                    <button
+                                        onClick={async () => {
+                                            // server-side preview with pagination
+                                            try {
+                                                setPreviewLoading(true);
+                                                setPreviewPage(1);
+                                                const q = deletePayload.filter || '';
+                                                const params: any = {
+                                                    preview: '1',
+                                                    page: 1,
+                                                    limit: previewPageSize,
+                                                    matchMode: deletePayload.matchMode || 'AND',
+                                                    force: 1,
+                                                };
+                                                if (deletePayload.filterRules) params.filterRules = JSON.stringify(deletePayload.filterRules);
+                                                else if (q) {
+                                                    params.filter = q;
+                                                    if (deletePayload.filterField) params.filterField = deletePayload.filterField;
+                                                }
+                                                const qs = new URLSearchParams(params).toString();
+                                                const response = await fetch(`/api/pastes?${qs}`);
+                                                if (!response.ok) {
+                                                    addNotification('Failed to preview matches.');
+                                                    setPreviewLoading(false);
+                                                    return;
+                                                }
+                                                const body = await response.json();
+                                                setPreviewItems(body.items || []);
+                                                setDeletePayload((p: any) => ({ ...p, previewCount: body.total || (body.items || []).length }));
+                                                // reset preview selected ids
+                                                setPreviewSelectedIds(new Set());
+                                                setShowPreviewList(true);
+                                            } catch (err) {
+                                                addNotification('Preview failed.');
+                                            } finally {
+                                                setPreviewLoading(false);
+                                            }
+                                        }}
+                                        style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Preview matches
+                                    </button>
+                                    <div style={{ color: '#ccc' }}>
+                                        {deletePayload.previewCount != null ? `${deletePayload.previewCount} matches` : 'No preview yet'}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {confirmStage === 2 && (
+                            <input
+                                value={deletePayload.confirmText || ''}
+                                onChange={(e) => setDeletePayload((p: any) => ({ ...p, confirmText: e.target.value }))}
+                                placeholder="Type DELETE to confirm"
+                                style={{ width: '100%', padding: '10px', borderRadius: 6, marginBottom: 12, background: '#1a1a1a', border: '1px solid #333', color: '#fff' }}
+                            />
+                        )}
+                        {/* Summary: count and note only (no box, no sample list) */}
+                        {confirmStage === 2 && (
+                            <div style={{ marginTop: 12, color: '#bbb', fontSize: 12 }}>
+                                {summaryLoading ? (
+                                    <span>Loading...</span>
+                                ) : (
+                                    <>
+                                        {(deletePayload?.summaryTotal ?? 0) > 0 && (
+                                            <div style={{ marginBottom: 6, color: '#ddd' }}>
+                                                <strong>{deletePayload.summaryTotal}</strong> item{(deletePayload.summaryTotal ?? 0) === 1 ? '' : 's'} will be deleted.
+                                            </div>
+                                        )}
+                                        Showing up to 200 sample items. The actual deletion may affect more items.
+                                    </>
+                                )}
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                            {confirmStage === 1 ? (
+                                <button
+                                    onClick={async () => {
+                                        // fetch summary sample then advance to final confirmation
+                                        try {
+                                            setSummaryLoading(true);
+                                            const params: any = { preview: '1', page: 1, limit: 200, force: 1, matchMode: deletePayload.matchMode || 'AND' };
+                                            if (deletePayload.filterRules) params.filterRules = JSON.stringify(deletePayload.filterRules);
+                                            else if (deletePayload.filter) {
+                                                params.filter = deletePayload.filter;
+                                                if (deletePayload.filterField) params.filterField = deletePayload.filterField;
+                                            }
+                                            const qs = new URLSearchParams(params).toString();
+                                            const res = await fetch(`/api/pastes?${qs}`);
+                                            if (!res.ok) {
+                                                addNotification('Failed to fetch summary.');
+                                                return;
+                                            }
+                                            const body = await res.json();
+                                            setSummaryItems(body.items || []);
+                                            setDeletePayload((p: any) => ({ ...p, summaryTotal: body.total }));
+                                            setConfirmStage(2);
+                                        } catch (err) {
+                                            addNotification('Failed to fetch summary.');
+                                        } finally {
+                                            setSummaryLoading(false);
+                                        }
+                                    }}
+                                    style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                >
+                                    Preview sample & continue
+                                </button>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={() => setConfirmStage(1)}
+                                        style={{ backgroundColor: '#3a3a3a', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Back
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if ((deletePayload.confirmText || '').toUpperCase() === 'DELETE') {
+                                                performBulkDelete();
+                                            } else {
+                                                addNotification('You must type DELETE to confirm.');
+                                            }
+                                        }}
+                                        style={{ backgroundColor: '#d9363e', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Delete permanently
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                        {/* Preview list */}
+                        {showPreviewList && previewItems && (
+                            <div style={{ marginTop: 16, maxHeight: 360, overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'auto', borderTop: '1px solid #222', paddingTop: 12 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                    <div style={{ fontWeight: 700, color: '#ddd' }}>Preview</div>
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                        <div style={{ color: '#ccc' }}>Page</div>
+                                        <button
+                                            onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
+                                            disabled={previewPage === 1}
+                                            style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 6, cursor: previewPage === 1 ? 'not-allowed' : 'pointer' }}
+                                        >
+                                            Prev
+                                        </button>
+                                        <div style={{ color: '#ccc' }}>{previewPage}</div>
+                                        <button
+                                            onClick={() => setPreviewPage((p) => p + 1)}
+                                            disabled={previewPage * previewPageSize >= (previewItems?.length || 0)}
+                                            style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 6, cursor: previewPage * previewPageSize >= (previewItems?.length || 0) ? 'not-allowed' : 'pointer' }}
+                                        >
+                                            Next
+                                        </button>
+                                        <select value={previewPageSize} onChange={(e) => { setPreviewPageSize(Number(e.target.value)); setPreviewPage(1); }} style={{ background: '#222', color: '#fff', border: '1px solid #333', padding: '6px', borderRadius: 6 }}>
+                                            <option value={5}>5</option>
+                                            <option value={10}>10</option>
+                                            <option value={25}>25</option>
+                                            <option value={50}>50</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, padding: '6px 8px', fontWeight: 700, borderBottom: '1px solid #222' }}>
+                                    <div>Name</div>
+                                    <div>UUID</div>
+                                    <div>Permanent</div>
+                                </div>
+                                {previewLoading ? (
+                                    <div style={{ padding: 12, color: '#ccc' }}>Loading...</div>
+                                ) : previewItems.length === 0 ? (
+                                    <div style={{ padding: 12, color: '#999' }}>No matches</div>
+                                ) : (
+                                    (() => {
+                                        const start = (previewPage - 1) * previewPageSize;
+                                        const pageItems = previewItems.slice(start, start + previewPageSize);
+                                        return pageItems.map((p) => (
+                                            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: confirmStage === 2 ? '2fr 3fr 1fr' : '2fr 3fr 1fr minmax(80px, auto)', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
+                                                <div>{p.name}</div>
+                                                <div style={{ color: 'blue', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { navigator.clipboard?.writeText(p.id); addNotification('UUID copied'); }}>
+                                                    {p.id}
+                                                </div>
+                                                <div>{String(p.permanent) === 'true' || p.permanent === true ? 'Yes' : 'No'}</div>
+                                                {confirmStage !== 2 && (
+                                                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                                        {addedFromPreviewIds.has(p.id) ? (
+                                                            <span style={{ color: '#666', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                                <input type="checkbox" disabled checked style={{ opacity: 0.6, cursor: 'not-allowed' }} />
+                                                                Added
+                                                            </span>
+                                                        ) : (
+                                                            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={previewSelectedIds.has(p.id)}
+                                                                    onChange={() => {
+                                                                        setPreviewSelectedIds(prev => {
+                                                                            const copy = new Set(prev);
+                                                                            if (copy.has(p.id)) copy.delete(p.id);
+                                                                            else copy.add(p.id);
+                                                                            return copy;
+                                                                        });
+                                                                    }}
+                                                                />
+                                                                <span style={{ color: '#ccc' }}>Select</span>
+                                                            </label>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ));
+                                    })()
+                                )}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, gap: 8 }}>
+                                    <div style={{ color: '#ccc' }}>{deletePayload.previewCount || previewItems.length} total</div>
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                        {/* Close preview button removed */}
+                                        {confirmStage !== 2 && (
+                                            <>
+                                                <button
+                                                    title="Adds the items you've checked in this preview to the dashboard 'Selected' list above"
+                                                    onClick={() => {
+                                                        const idsToAdd = new Set(previewSelectedIds);
+                                                        const count = idsToAdd.size;
+                                                        setSelectedIds((prev) => {
+                                                            const copy = new Set(prev);
+                                                            for (const id of idsToAdd) copy.add(id);
+                                                            return copy;
+                                                        });
+                                                        setPreviewSelectedIds((prev) => {
+                                                            const next = new Set(prev);
+                                                            for (const id of idsToAdd) next.delete(id);
+                                                            return next;
+                                                        });
+                                                        setAddedFromPreviewIds((prev) => {
+                                                            const next = new Set(prev);
+                                                            for (const id of idsToAdd) next.add(id);
+                                                            return next;
+                                                        });
+                                                        setAddedPicksCount(count);
+                                                        setShowStayOrCloseAfterPicks(true);
+                                                        addNotification(`${count} item${count === 1 ? '' : 's'} added to Selected.`);
+                                                    }}
+                                                    style={{
+                                                        background: '#722ed1',
+                                                        color: '#fff',
+                                                        border: 'none',
+                                                        padding: '6px 10px',
+                                                        borderRadius: 6,
+                                                        marginLeft: 8,
+                                                        cursor: 'pointer',
+                                                    }}
+                                                >
+                                                    Add preview picks to Selected ({previewSelectedIds.size})
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    aria-label="Help: add preview picks"
+                                                    onMouseEnter={(e) =>
+                                                        showTooltip(e as unknown as React.MouseEvent<HTMLButtonElement>, 'Adds checked preview rows to the dashboard selection above.')
+                                                    }
+                                                    onMouseLeave={hideTooltip}
+                                                    onFocus={(e) =>
+                                                        showTooltip(e as unknown as React.MouseEvent<HTMLButtonElement>, 'Adds checked preview rows to the dashboard selection above.')
+                                                    }
+                                                    onBlur={hideTooltip}
+                                                    onTouchStart={(e) => {
+                                                        showTooltip(e as any, 'Adds checked preview rows to the dashboard selection above.', true);
+                                                    }}
+                                                    onTouchEnd={() => {
+                                                        setTimeout(hideTooltip, 2200);
+                                                    }}
+                                                    style={{
+                                                        background: 'transparent',
+                                                        border: '1px solid rgba(255,255,255,0.06)',
+                                                        color: '#999',
+                                                        borderRadius: 999,
+                                                        width: 20,
+                                                        height: 20,
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        fontSize: 12,
+                                                        cursor: 'help',
+                                                        alignSelf: 'center',
+                                                    }}
+                                                >
+                                                    ?
+                                                </button>
+                                            </>
+                                        )}
+                                        {showStayOrCloseAfterPicks && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                                                <span style={{ color: '#bbb', fontSize: 13 }}>
+                                                    {addedPicksCount} item{addedPicksCount === 1 ? '' : 's'} added. Stay here or close modal (selection saved)?
+                                                </span>
+                                                <button
+                                                    onClick={() => setShowStayOrCloseAfterPicks(false)}
+                                                    style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}
+                                                >
+                                                    Stay here
+                                                </button>
+                                                <button
+                                                    onClick={closeDeleteModalKeepingData}
+                                                    style={{ background: '#2a7f2a', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}
+                                                >
+                                                    Close modal
+                                                </button>
+                                            </div>
+                                        )}
+                                        {/* Continue to final confirmation button removed — use "Preview sample & continue" above */}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+            {tooltipState.visible && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        left: Math.max(8, Math.min(tooltipState.left, window.innerWidth - 320)),
+                        top: Math.max(8, Math.min(tooltipState.top, window.innerHeight - 120)),
+                        transform: 'translateY(0)',
+                        background: '#141414',
+                        color: '#fff',
+                        padding: isMobileLayout ? '12px 14px' : '8px 10px',
+                        borderRadius: 8,
+                        zIndex: 4000,
+                        maxWidth: isMobileLayout ? '86vw' : 300,
+                        boxShadow: '0 6px 18px rgba(0,0,0,0.6)',
+                        fontSize: isMobileLayout ? 14 : 12,
+                    }}
+                >
+                    {tooltipState.text}
                 </div>
             )}
         </div>
