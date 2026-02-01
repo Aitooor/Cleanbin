@@ -762,6 +762,12 @@ li.paste-item, .admin-panel li, .admins-list-section li {
     gap: 12px;
 }
 
+.header-center {
+    flex: 1 1 auto;
+    display: flex;
+    justify-content: center;
+}
+
 .dashboard-search {
     width: 260px;
     max-width: 100%;
@@ -771,6 +777,25 @@ li.paste-item, .admin-panel li, .admins-list-section li {
     background-color: #101115;
     color: #f5f5f5;
     font-size: 14px;
+}
+
+.home-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 16px;
+    border-radius: 999px;
+    border: none;
+    background-color: #303030;
+    color: #f5f5f5;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    min-width: 70px;
+}
+
+.home-button:hover {
+    background-color: #444;
 }
 
 .logout-button {
@@ -800,9 +825,13 @@ li.paste-item, .admin-panel li, .admins-list-section li {
     .dashboard-header {
         padding: 10px 10px 14px;
     }
-    .dashboard-search {
+    .header-center {
         flex: 1 1 auto;
-        max-width: none;
+        justify-content: center;
+    }
+    .dashboard-search {
+        width: 100%;
+        max-width: 260px;
     }
     .logout-button {
         padding: 8px 14px;

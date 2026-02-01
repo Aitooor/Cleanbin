@@ -536,13 +536,16 @@ const Dashboard: React.FC<DashboardProps> = () => {
     return (
         <div className="dashboard-container">
             <div className="dashboard-header">
-                <input
-                    type="text"
-                    placeholder="Search..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="dashboard-search"
-                />
+                <button className="home-button" onClick={() => router.push('/')}>Home</button>
+                <div className="header-center">
+                    <input
+                        type="text"
+                        placeholder="Search..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="dashboard-search"
+                    />
+                </div>
                 <button onClick={handleLogout} className="logout-button">
                     <FiLogOut className="logout-icon" />
                     Logout
