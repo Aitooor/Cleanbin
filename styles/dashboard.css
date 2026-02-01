@@ -1,7 +1,7 @@
 body,
 .admin-dashboard,
 .dashboard-container {
-    background: linear-gradient(135deg, #232526 0%, #181920 100%) !important;
+    background: #1e1e1e !important;
     color: #f5f5f5;
     min-height: 100vh;
 }
@@ -31,6 +31,7 @@ h1, h2, h3 {
     margin: 0 auto;
     padding: 8px 16px 40px 16px;
     box-sizing: border-box;
+    background: none;
 }
 
 /* Navbar/Header Moderno */
@@ -38,17 +39,16 @@ h1, h2, h3 {
     width: 100vw;
     max-width: 100%;
     height: 64px;
-    background: rgba(30,34,40,0.97);
+    background: #1e1e1e;
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 0 48px;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+    box-shadow: none;
     position: sticky;
     top: 0;
     z-index: 100;
     border-bottom: 1.5px solid #232b36;
-    backdrop-filter: blur(12px);
 }
 
 .dashboard-logo {
@@ -56,7 +56,6 @@ h1, h2, h3 {
     font-weight: 900;
     color: #90caf9;
     letter-spacing: -2px;
-    text-shadow: 0 2px 12px #1e88e555;
     user-select: none;
     font-family: 'Montserrat', 'Inter', 'Segoe UI', Arial, sans-serif;
     margin-right: 40px;
@@ -87,9 +86,8 @@ h1, h2, h3 {
 
 .dashboard-navlink.active,
 .dashboard-navlink:hover {
-    background: linear-gradient(90deg, #2196f3 0%, #21cbf3 100%);
+    background: #1e1e1e;
     color: #fff;
-    box-shadow: 0 2px 12px #2196f344;
 }
 
 .dashboard-navlink.active::after,
@@ -102,7 +100,7 @@ h1, h2, h3 {
     bottom: 0;
     height: 3px;
     border-radius: 2px;
-    background: linear-gradient(90deg, #42a5f5 0%, #00e5ff 100%);
+    background: #1e1e1e;
     transition: width 0.2s;
 }
 
@@ -127,9 +125,9 @@ h1, h2, h3 {
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    background: rgba(30,34,40,0.98);
+    background: #1e1e1e;
     border-radius: 18px;
-    box-shadow: 0 8px 32px rgba(30,136,229,0.10);
+    box-shadow: none;
     overflow: hidden;
     font-size: 1.08rem;
     min-width: 420px;
@@ -182,18 +180,27 @@ h1, h2, h3 {
 }
 
 .card {
-    background: rgba(30,34,40,0.92);
+    background: #1e1e1e;
     border-radius: 32px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.38), 0 8px 32px rgba(30,136,229,0.13);
+    box-shadow: none;
     padding: 56px 64px;
     margin-bottom: 56px;
     margin-top: 0;
     width: 100%;
     max-width: 900px;
     transition: box-shadow 0.2s, background 0.2s;
-    backdrop-filter: blur(14px);
     border: 2.5px solid #232b36;
     animation: fadeInCard 0.7s cubic-bezier(.4,0,.2,1);
+}
+
+.card-title {
+    font-size: 2.8rem;
+    font-weight: 900;
+    margin-bottom: 34px;
+    margin-top: 0;
+    color: #90caf9;
+    letter-spacing: -2.5px;
+    font-family: 'Montserrat', 'Inter', 'Segoe UI', Arial, sans-serif;
 }
 
 /* Grid used for paste list header and rows to ensure column alignment */
@@ -592,28 +599,11 @@ h1, h2, h3 {
     to { opacity: 1; transform: none;}
 }
 
-.card-title {
-    font-size: 2.8rem;
-    font-weight: 900;
-    margin-bottom: 34px;
-    margin-top: 0;
-    color: #90caf9;
-    letter-spacing: -2.5px;
-    text-shadow: 0 2px 16px #1e88e533;
-    font-family: 'Montserrat', 'Inter', 'Segoe UI', Arial, sans-serif;
-}
-
-/* Elimina estilos de listas y li para listados y admins */
-ul.paste-list, .admin-panel ul, .admins-list-section ul,
-li.paste-item, .admin-panel li, .admins-list-section li {
-    display: none !important;
-}
-
 /* Mejora visual para formularios */
 .form-section {
-    background: rgba(30,34,40,0.98);
+    background: #1e1e1e;
     border-radius: 18px;
-    box-shadow: 0 8px 32px rgba(30,136,229,0.10);
+    box-shadow: none;
     padding: 36px 32px;
     margin-bottom: 32px;
     width: 100%;

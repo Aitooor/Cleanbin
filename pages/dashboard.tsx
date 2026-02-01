@@ -557,9 +557,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     style={{
                         padding: '12px 18px',
                         borderRadius: '8px',
-                        backgroundColor: '#202224',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                        minWidth: '140px',
+                                                                        minWidth: '140px',
                         textAlign: 'center',
                     }}
                 >
@@ -570,9 +568,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     style={{
                         padding: '12px 18px',
                         borderRadius: '8px',
-                        backgroundColor: '#202224',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                        minWidth: '140px',
+                                                                        minWidth: '140px',
                         textAlign: 'center',
                     }}
                 >
@@ -583,9 +579,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     style={{
                         padding: '12px 18px',
                         borderRadius: '8px',
-                        backgroundColor: '#202224',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                        minWidth: '140px',
+                                                                        minWidth: '140px',
                         textAlign: 'center',
                     }}
                 >
