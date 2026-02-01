@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 // Using simple list rendering for stability (virtualization removed temporarily)
 import { useRouter } from 'next/router';
 import { useNotification } from 'components/NotificationProvider';
-import { FaTrash, FaClipboard, FaEye } from 'react-icons/fa';
+import { FaTrash, FaClipboard, FaEye, FaClone, FaPen } from 'react-icons/fa';
 import { FiLogOut } from 'react-icons/fi';
 import type { GetServerSideProps } from 'next';
 import { parse } from 'cookie';
@@ -578,7 +578,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                 />
             </div>
             {/* Contadores de pastes */}
-            <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
+            <div className="counters" style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
                 <div
                     style={{
                         padding: '12px 18px',
@@ -623,59 +623,70 @@ const Dashboard: React.FC<DashboardProps> = () => {
             <div className="dashboard-content">
                 <div className="card">
                     <h1 className="card-title">Pastes</h1>
-                    <div style={{ display: 'flex', gap: 10, marginTop: 12, marginBottom: 8 }}>
-                        <button
-                            onClick={() => openDeleteModal({ mode: 'all' })}
-                            style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                        >
-                            Delete All
-                        </button>
-                        <button
-                            onClick={() => openDeleteModal({ mode: 'permanent' })}
-                            style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                        >
-                            Delete Permanent
-                        </button>
-                        <button
-                            onClick={() => openDeleteModal({ mode: 'temporary' })}
-                            style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                        >
-                            Delete Temporary
-                        </button>
-                        <button
-                            onClick={() => {
-                                if (!showDeleteModal && deletePayload?.mode === 'filtered') {
-                                    setShowDeleteModal(true);
-                                    setConfirmStage(1);
-                                    setShowStayOrCloseAfterPicks(false);
-                                    setPreviewItems([]);
-                                    setPreviewSelectedIds(new Set());
-                                    setPreviewPage(1);
-                                    setPreviewPageSize(10);
-                                } else {
-                                    openDeleteModal({ mode: 'filtered', filter: searchTerm });
-                                }
-                            }}
-                            style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                        >
-                            Delete Filtered
-                        </button>
-                        <button
-                            onClick={() => openDeleteModal({ mode: 'selected' })}
-                            disabled={selectedIds.size === 0}
-                            style={{
-                                backgroundColor: selectedIds.size === 0 ? '#333' : '#722ed1',
-                                color: '#fff',
-                                border: 'none',
-                                borderRadius: 6,
-                                padding: '8px 12px',
-                                cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
-                            }}
-                        >
-                            Delete Selected ({selectedIds.size})
-                        </button>
+                    <div className="delete-options" style={{ marginTop: 12, marginBottom: 8 }}>
+                        <div className="delete-options-label" style={{ fontWeight: 800, color: '#ddd', marginBottom: 8 }}>
+                            Delete options:
+                        </div>
+                            <div className="actions-row" role="toolbar" aria-label="Delete options" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                                onClick={() => openDeleteModal({ mode: 'all' })}
+                                style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: '14px', minWidth: '80px', flex: '0 0 auto' }}
+                            >
+                                All
+                            </button>
+                            <button
+                                onClick={() => openDeleteModal({ mode: 'permanent' })}
+                                style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: '14px', minWidth: '80px', flex: '0 0 auto' }}
+                            >
+                                Permanent
+                            </button>
+                            <button
+                                onClick={() => openDeleteModal({ mode: 'temporary' })}
+                                style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: '14px', minWidth: '80px', flex: '0 0 auto' }}
+                            >
+                                Temporary
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (!showDeleteModal && deletePayload?.mode === 'filtered') {
+                                        setShowDeleteModal(true);
+                                        setConfirmStage(1);
+                                        setShowStayOrCloseAfterPicks(false);
+                                        setPreviewItems([]);
+                                        setPreviewSelectedIds(new Set());
+                                        setPreviewPage(1);
+                                        setPreviewPageSize(10);
+                                    } else {
+                                        openDeleteModal({ mode: 'filtered', filter: searchTerm });
+                                    }
+                                }}
+                                style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: '14px', minWidth: '80px', flex: '0 0 auto' }}
+                            >
+                                Filtered
+                            </button>
+                            <button
+                                onClick={() => openDeleteModal({ mode: 'selected' })}
+                                disabled={selectedIds.size === 0}
+                                style={{
+                                    backgroundColor: selectedIds.size === 0 ? '#333' : '#722ed1',
+                                    color: '#fff',
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    padding: '8px 12px',
+                                    cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
+                                    fontSize: '14px',
+                                    minWidth: '80px',
+                                    flex: '0 0 auto'
+                                }}
+                            >
+                                Selected ({selectedIds.size})
+                            </button>
+                        </div>
+                        <div className="delete-options-summary" style={{ marginTop: 8, color: '#bbb', fontSize: 13 }}>
+                            Summary: All · Permanent · Temporary · Filtered · Selected
+                        </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222', fontWeight: 700, alignItems: 'center' }}>
+                    <div className="paste-grid paste-grid--header" style={{ borderBottom: '1px solid #222', fontWeight: 700 }}>
                         <div>
                             <input
                                 type="checkbox"
@@ -694,7 +705,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>No pastes to show</div>
                         ) : (
                             filteredPastes.map((paste) => (
-                                <div key={paste.id} style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #111' }}>
+                                <div key={paste.id} className="paste-grid" style={{ alignItems: 'center', borderBottom: '1px solid #111' }}>
                                     <div>
                                         <input type="checkbox" checked={selectedIds.has(paste.id)} onChange={() => toggleSelect(paste.id)} />
                                     </div>
@@ -703,21 +714,46 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         {paste.id}
                                     </div>
                                     <div>{paste.permanent ? 'Yes' : 'No'}</div>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <button className="button preview-button" onClick={() => window.open(`/${paste.id}`, '_blank')} style={{ backgroundColor: '#52c41a', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            <FaEye /> Preview
+                                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+                                        <button
+                                            className="action-icon preview"
+                                            title="Preview"
+                                            aria-label="Preview"
+                                            onClick={() => window.open(`/${paste.id}`, '_blank')}
+                                        >
+                                            <FaEye />
                                         </button>
-                                        <button className="button copy-url-button" onClick={() => handleCopyToClipboard(`${window.location.origin}/${paste.id}`, 'URL copied to clipboard')} style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            <FaClipboard /> Copy URL
+                                        <button
+                                            className="action-icon copy"
+                                            title="Copy URL"
+                                            aria-label="Copy URL"
+                                            onClick={() => handleCopyToClipboard(`${window.location.origin}/${paste.id}`, 'URL copied to clipboard')}
+                                        >
+                                            <FaClipboard />
                                         </button>
-                                        <button className="button clone-button" onClick={() => handleClonePaste(paste.id)} style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            <FaClipboard /> Clone
+                                        <button
+                                            className="action-icon clone"
+                                            title="Clone"
+                                            aria-label="Clone"
+                                            onClick={() => handleClonePaste(paste.id)}
+                                        >
+                                            <FaClone />
                                         </button>
-                                        <button className="button rename-button" onClick={() => openRenameModal(paste)} style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            Rename
+                                        <button
+                                            className="action-icon rename"
+                                            title="Rename"
+                                            aria-label="Rename"
+                                            onClick={() => openRenameModal(paste)}
+                                        >
+                                            <FaPen />
                                         </button>
-                                        <button className="button delete-button" onClick={() => handleDeletePaste(paste.id)} style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            <FaTrash /> Delete
+                                        <button
+                                            className="action-icon delete"
+                                            title="Delete"
+                                            aria-label="Delete"
+                                            onClick={() => handleDeletePaste(paste.id)}
+                                        >
+                                            <FaTrash />
                                         </button>
                                     </div>
                                 </div>
@@ -1260,10 +1296,11 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         </select>
                                     </div>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, padding: '6px 8px', fontWeight: 700, borderBottom: '1px solid #222' }}>
+                                <div className="preview-grid" style={{ fontWeight: 700, borderBottom: '1px solid #222' }}>
                                     <div>Name</div>
                                     <div>UUID</div>
                                     <div>Permanent</div>
+                                    <div></div>
                                 </div>
                                 {previewLoading ? (
                                     <div style={{ padding: 12, color: '#ccc' }}>Loading...</div>
@@ -1274,7 +1311,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         const start = (previewPage - 1) * previewPageSize;
                                         const pageItems = previewItems.slice(start, start + previewPageSize);
                                         return pageItems.map((p) => (
-                                            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: confirmStage === 2 ? '2fr 3fr 1fr' : '2fr 3fr 1fr minmax(80px, auto)', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
+                                            <div key={p.id} className="preview-grid" style={{ alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
                                                 <div>{p.name}</div>
                                                 <div style={{ color: 'blue', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { navigator.clipboard?.writeText(p.id); addNotification('UUID copied'); }}>
                                                     {p.id}

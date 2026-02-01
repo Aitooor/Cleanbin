@@ -194,6 +194,337 @@ h1, h2, h3 {
     animation: fadeInCard 0.7s cubic-bezier(.4,0,.2,1);
 }
 
+/* Grid used for paste list header and rows to ensure column alignment */
+/* MOBILE-FIRST: stack rows for small screens, switch to grid on larger */
+.paste-grid {
+    display: block;
+    padding: 8px 12px;
+    box-sizing: border-box;
+    border-radius: 4px;
+}
+
+.paste-grid > div {
+    display: block;
+    margin-bottom: 8px;
+    color: inherit;
+}
+
+.paste-grid .button {
+    margin-right: 8px;
+}
+
+.paste-grid--header {
+    padding: 8px 12px;
+}
+
+/* Actions row inside each paste */
+.paste-grid > div:last-child {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 0;
+}
+
+/* Preview list stacked on mobile */
+.preview-grid {
+    display: block;
+    padding: 6px 8px;
+    box-sizing: border-box;
+}
+
+/* Larger screens: use columns for perfect alignment */
+@media (min-width: 600px) {
+    .paste-grid {
+        display: grid;
+        grid-template-columns: 40px 2fr 3fr 100px 160px; /* checkbox, name, uuid, permanent, actions */
+        gap: 8px;
+        padding: 8px 12px;
+        align-items: center;
+    }
+    .paste-grid > div {
+        margin-bottom: 0;
+    }
+    .paste-grid > div:last-child {
+        justify-self: end;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+    .preview-grid {
+        display: grid;
+        grid-template-columns: 2fr 3fr 100px minmax(80px, auto);
+        gap: 8px;
+        padding: 6px 8px;
+        align-items: center;
+    }
+}
+
+/* Improve header/search/counters responsiveness */
+.dashboard-container input[type="text"] {
+    width: 100% !important; /* override inline width on small screens */
+    max-width: 760px;
+    box-sizing: border-box;
+}
+
+.dashboard-header {
+    padding: 12px 20px;
+    height: auto;
+    align-items: flex-start;
+}
+
+/* Counters: center and allow wrapping on small screens */
+.counters {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* MOBILE: hide the large table-like header labels and show inline labels inside each card row */
+@media (max-width: 599px) {
+    .paste-grid--header > div:not(:first-child) {
+        display: none;
+    }
+}
+
+.paste-grid {
+    position: relative;
+}
+
+.paste-grid > div:nth-child(2)::before {
+    content: 'Name';
+    display: block;
+    font-weight: 800;
+    color: #ddd;
+    margin-bottom: 6px;
+    font-size: 0.95rem;
+}
+.paste-grid > div:nth-child(3)::before {
+    content: 'UUID';
+    display: block;
+    font-weight: 800;
+    color: #ddd;
+    margin-bottom: 6px;
+    font-size: 0.95rem;
+}
+.paste-grid > div:nth-child(4)::before {
+    content: 'Permanent';
+    display: block;
+    font-weight: 800;
+    color: #ddd;
+    margin-bottom: 6px;
+    font-size: 0.95rem;
+}
+
+/* Checkbox vertical alignment */
+.paste-grid > div:first-child {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+@media (max-width: 599px) {
+    .paste-grid > div:first-child {
+        justify-content: flex-start;
+        padding-left: 6px;
+    }
+}
+
+/* Top action buttons row (Delete All / Permanent / etc) */
+.actions-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.actions-row button {
+    padding: 8px 12px;
+    border-radius: 8px;
+    min-width: 80px;
+    max-width: 120px;
+    font-weight: 700;
+    font-size: 14px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+/* full/short labels for delete buttons */
+.full-label { display: none; }
+.short-label { display: none; }
+
+@media (max-width: 599px) {
+    .actions-row {
+        gap: 6px;
+    }
+    .actions-row button {
+        min-width: 70px;
+        max-width: 100px;
+        padding: 6px 8px;
+        font-size: 13px;
+    }
+    /* ensure two columns on small screens; full width on very small */
+    @media (max-width: 420px) {
+        .actions-row button {
+            flex: 1 1 calc(50% - 6px);
+            min-width: 60px;
+            max-width: none;
+        }
+    }
+}
+
+/* Reduce card padding and title size on small screens to increase content area */
+@media (max-width: 599px) {
+    .card {
+        padding: 18px 14px;
+        border-radius: 20px;
+    }
+    .card-title {
+        font-size: 1.8rem;
+        margin-bottom: 18px;
+    }
+}
+
+/* Mobile: make the inline labels less heavy and more subtle to reduce clutter */
+@media (max-width: 599px) {
+    .paste-grid > div:nth-child(2)::before,
+    .paste-grid > div:nth-child(3)::before,
+    .paste-grid > div:nth-child(4)::before {
+        font-weight: 700;
+        color: #bdbdbd;
+        margin-bottom: 4px;
+        font-size: 0.85rem;
+    }
+    /* reduce repetition by hiding the header-like labels for subsequent items visually */
+    .paste-grid + .paste-grid > div:nth-child(2)::before {
+        content: none;
+    }
+}
+
+/* Ensure action icons stay visually grouped and aligned on desktop too */
+.paste-grid > div:last-child .action-icon {
+    margin-left: 4px;
+}
+
+/* Buttons: make them responsive and touch-friendly on small screens */
+.paste-grid .button,
+.preview-grid .button {
+    min-width: 110px;
+    padding: 10px 14px;
+    font-size: 0.95rem;
+}
+
+@media (min-width: 600px) {
+    /* Restore header labels on larger screens */
+    .paste-grid--header > div:not(:first-child) {
+        display: block;
+    }
+    .paste-grid > div:nth-child(2)::before,
+    .paste-grid > div:nth-child(3)::before,
+    .paste-grid > div:nth-child(4)::before {
+        content: none;
+    }
+    /* Slightly reduce button min-width on wide screens */
+    .paste-grid .button,
+    .preview-grid .button {
+        min-width: 80px;
+        padding: 8px 12px;
+        font-size: 1rem;
+    }
+}
+
+/* Action icon buttons (flat, square icons) */
+.action-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    font-size: 18px;
+    box-shadow: none;
+    transition: transform 0.08s ease, opacity 0.12s ease;
+}
+.action-icon:active { transform: translateY(1px); }
+.action-icon.preview { background: #52c41a; }
+.action-icon.copy { background: #1890ff; }
+.action-icon.clone { background: #1890ff; }
+.action-icon.rename { background: #fa8c16; }
+.action-icon.delete { background: #ff4d4f; }
+
+/* On very small screens, make icons slightly larger and touch friendly */
+@media (max-width: 420px) {
+    .action-icon { width: 48px; height: 48px; font-size: 20px; border-radius: 10px; }
+}
+/* Make action icons a bit smaller and inline always */
+.action-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+    border-radius: 6px;
+    padding: 0;
+}
+
+.paste-grid > div:last-child {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: nowrap; /* keep icons inline */
+}
+
+/* Checkbox/selectbox adjustments */
+.paste-grid input[type="checkbox"],
+.preview-grid input[type="checkbox"] {
+    transform: scale(1.1);
+    margin: 0 8px 0 4px;
+    width: 16px;
+    height: 16px;
+}
+
+/* Header row: keep checkbox aligned left on small screens */
+@media (max-width: 599px) {
+    .paste-grid--header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 12px;
+        justify-content: flex-start;
+    }
+    .paste-grid--header > div:first-child {
+        margin-left: 6px;
+    }
+    /* ensure header labels hidden still don't take space */
+    .paste-grid--header > div:not(:first-child) { display: none; }
+}
+
+/* Ensure icons stay within their cell and don't overflow container */
+.paste-grid {
+    overflow: hidden; /* contain icons inside the card */
+    position: relative;
+}
+.paste-grid > div:first-child {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding-left: 6px;
+}
+
+/* Keep actions inline and grouped; reduce gap a bit */
+.paste-grid > div:first-child .action-icon {
+    margin-right: 6px;
+}
+
+/* Top actions scroll fade indicator on small screens */
+@media (max-width: 599px) {
+    .actions-row {
+        position: relative;
+    }
+}
+
 @keyframes fadeInCard {
     from { opacity: 0; transform: translateY(30px) scale(0.98);}
     to { opacity: 1; transform: none;}

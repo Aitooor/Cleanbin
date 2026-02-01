@@ -1,4 +1,5 @@
 import '../styles/globals.css';
+import '../styles/dashboard.css';
 import type { AppProps } from 'next/app';
 import { NotificationProvider } from '../components/NotificationProvider';
 
