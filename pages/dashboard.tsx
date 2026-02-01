@@ -116,22 +116,45 @@ const Dashboard: React.FC<DashboardProps> = () => {
     }, [sentinelRef.current, loadingMore, pastes.length, total, nextToken]);
 
     // Listen for BroadcastChannel messages from other tabs and refresh quickly.
+    // If BroadcastChannel is not available, fall back to light polling every 30s.
     useEffect(() => {
         let cleanup: (() => void) | undefined;
-        try {
-            // dynamic import to avoid SSR issues
-            import('../utils/broadcast').then((mod) => {
-                cleanup = mod.listen(async (msg) => {
-                    if (!msg) return;
-                    if (msg.type === 'paste_created' || msg.type === 'paste_deleted' || msg.type === 'paste_renamed') {
-                        // quick forced fetch to update UI
-                        await fetchPastes(true);
+        let fallbackInterval: number | null = null;
+        // dynamic import to avoid SSR issues
+        import('../utils/broadcast')
+            .then((mod) => {
+                try {
+                    const bc = mod.getBroadcastChannel();
+                    if (bc) {
+                        cleanup = mod.listen(async (msg) => {
+                            if (!msg) return;
+                            if (msg.type === 'paste_created' || msg.type === 'paste_deleted' || msg.type === 'paste_renamed') {
+                                // quick forced fetch to update UI
+                                await fetchPastes(true);
+                            }
+                        });
+                        return;
                     }
-                });
+                } catch (err) {
+                    // ignore and start fallback
+                }
+                // BroadcastChannel not available: start fallback polling every 30s
+                fallbackInterval = window.setInterval(async () => {
+                    if (document.visibilityState === 'hidden') return;
+                    await fetchPastes(true);
+                }, 30000);
+            })
+            .catch(() => {
+                // import failed: start fallback polling
+                fallbackInterval = window.setInterval(async () => {
+                    if (document.visibilityState === 'hidden') return;
+                    await fetchPastes(true);
+                }, 30000);
             });
-        } catch (err) {}
+
         return () => {
             if (cleanup) cleanup();
+            if (fallbackInterval) clearInterval(fallbackInterval);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
