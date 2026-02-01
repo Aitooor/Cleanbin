@@ -57,23 +57,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [limit]);
 
-    // Poll for fresh data when the dashboard is visible to provide near-instant updates.
-    useEffect(() => {
-        if (!mounted) return;
-        let intervalId: number | null = null;
-        const startPolling = () => {
-            // poll every 3 seconds
-            intervalId = window.setInterval(async () => {
-                if (document.visibilityState === 'hidden') return;
-                await fetchPastes(true);
-            }, 3000);
-        };
-        startPolling();
-        return () => {
-            if (intervalId) clearInterval(intervalId);
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [mounted, limit]);
+    // Polling removed — dashboard relies on BroadcastChannel for real-time updates.
 
     useEffect(() => {
         // Filtrar los pastes según el término de búsqueda
