@@ -131,6 +131,27 @@ const Dashboard: React.FC<DashboardProps> = () => {
         return () => obs.disconnect();
     }, [sentinelRef.current, loadingMore, pastes.length, total, nextToken]);
 
+    // Listen for BroadcastChannel messages from other tabs and refresh quickly.
+    useEffect(() => {
+        let cleanup: (() => void) | undefined;
+        try {
+            // dynamic import to avoid SSR issues
+            import('../utils/broadcast').then((mod) => {
+                cleanup = mod.listen(async (msg) => {
+                    if (!msg) return;
+                    if (msg.type === 'paste_created' || msg.type === 'paste_deleted' || msg.type === 'paste_renamed') {
+                        // quick forced fetch to update UI
+                        await fetchPastes(true);
+                    }
+                });
+            });
+        } catch (err) {}
+        return () => {
+            if (cleanup) cleanup();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     interface Paste {
         id: string;
         name: string;
@@ -144,6 +165,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
         if (response.ok) {
             setPastes(pastes.filter((paste) => paste.id !== id));
             addNotification('Paste deleted successfully.');
+            try {
+                const { postMessage } = await import('../utils/broadcast');
+                postMessage({ type: 'paste_deleted', id });
+            } catch (err) {}
         } else {
             addNotification('Failed to delete paste.');
         }
@@ -172,6 +197,10 @@ const Dashboard: React.FC<DashboardProps> = () => {
             setPastes((prev) => prev.map((p) => (p.id === renameTargetId ? { ...p, name: renameValue } : p)));
             addNotification('Name updated successfully.');
             handleCancelRename();
+            try {
+                const { postMessage } = await import('../utils/broadcast');
+                postMessage({ type: 'paste_renamed', id: renameTargetId, name: renameValue });
+            } catch (err) {}
         } else {
             addNotification('Failed to update name.');
         }
