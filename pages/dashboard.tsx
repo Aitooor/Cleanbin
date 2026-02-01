@@ -38,6 +38,28 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [summaryItems, setSummaryItems] = useState<any[]>([]);
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [isMobileLayout, setIsMobileLayout] = useState(false);
+    const [tooltipState, setTooltipState] = useState<{ visible: boolean; text: string; left: number; top: number }>({
+        visible: false,
+        text: '',
+        left: 0,
+        top: 0,
+    });
+
+    const showTooltip = (e: any, text: string, center = false) => {
+        if (center) {
+            const left = window.innerWidth / 2 - 160;
+            const top = window.innerHeight / 2 - 40;
+            setTooltipState({ visible: true, text, left, top });
+            return;
+        }
+        const rect = (e.target as HTMLElement).getBoundingClientRect();
+        const left = Math.max(8, rect.left);
+        const top = rect.bottom + 8;
+        setTooltipState({ visible: true, text, left, top });
+    };
+    const hideTooltip = () => {
+        setTooltipState((s) => ({ ...s, visible: false }));
+    };
     // simpler: always render fallback list
 
     // no dynamic import
@@ -836,9 +858,46 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                             <option value="AND">All rules (AND)</option>
                                             <option value="OR">Any rule (OR)</option>
                                         </select>
-                                        <div style={{ fontSize: 12, color: '#999', maxWidth: 220 }}>
-                                            Choose how rules are combined: "All" requires every rule to match; "Any" requires at least one.
-                                        </div>
+                                        <button
+                                            type="button"
+                                            aria-label="Help: combine rules"
+                                            onMouseEnter={(e) =>
+                                                showTooltip(
+                                                    e as unknown as React.MouseEvent<HTMLButtonElement>,
+                                                    'Combine rules: "All" requires every rule to match; "Any" requires at least one.'
+                                                )
+                                            }
+                                            onMouseLeave={hideTooltip}
+                                            onFocus={(e) =>
+                                                showTooltip(
+                                                    e as unknown as React.MouseEvent<HTMLButtonElement>,
+                                                    'Combine rules: "All" requires every rule to match; "Any" requires at least one.'
+                                                )
+                                            }
+                                            onBlur={hideTooltip}
+                                            onTouchStart={(e) => {
+                                                // show centered tooltip on touch devices
+                                                showTooltip(e as any, 'Combine rules: "All" requires every rule to match; "Any" requires at least one.', true);
+                                            }}
+                                            onTouchEnd={() => {
+                                                setTimeout(hideTooltip, 2200);
+                                            }}
+                                            style={{
+                                                background: 'transparent',
+                                                border: '1px solid rgba(255,255,255,0.06)',
+                                                color: '#999',
+                                                borderRadius: 999,
+                                                width: 20,
+                                                height: 20,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontSize: 12,
+                                                cursor: 'help',
+                                            }}
+                                        >
+                                            ?
+                                        </button>
                                     </div>
                                 </div>
 
@@ -1228,13 +1287,64 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         >
                                             Add preview picks to Selected ({previewSelectedIds.size})
                                         </button>
-                                        <div style={{ color: '#999', fontSize: 12, alignSelf: 'center' }}>Adds checked preview rows to the dashboard selection above.</div>
+                                        <button
+                                            type="button"
+                                            aria-label="Help: add preview picks"
+                                            onMouseEnter={(e) =>
+                                                showTooltip(e as unknown as React.MouseEvent<HTMLButtonElement>, 'Adds checked preview rows to the dashboard selection above.')
+                                            }
+                                            onMouseLeave={hideTooltip}
+                                            onFocus={(e) => showTooltip(e as unknown as React.MouseEvent<HTMLButtonElement>, 'Adds checked preview rows to the dashboard selection above.')}
+                                            onBlur={hideTooltip}
+                                            onTouchStart={(e) => {
+                                                showTooltip(e as any, 'Adds checked preview rows to the dashboard selection above.', true);
+                                            }}
+                                            onTouchEnd={() => {
+                                                setTimeout(hideTooltip, 2200);
+                                            }}
+                                            style={{
+                                                background: 'transparent',
+                                                border: '1px solid rgba(255,255,255,0.06)',
+                                                color: '#999',
+                                                borderRadius: 999,
+                                                width: 20,
+                                                height: 20,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontSize: 12,
+                                                cursor: 'help',
+                                                alignSelf: 'center',
+                                            }}
+                                        >
+                                            ?
+                                        </button>
                                         {/* Continue to final confirmation button removed — use "Yes, continue" above */}
                                     </div>
                                 </div>
                             </div>
                         )}
                     </div>
+                </div>
+            )}
+            {tooltipState.visible && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        left: Math.max(8, Math.min(tooltipState.left, window.innerWidth - 320)),
+                        top: Math.max(8, Math.min(tooltipState.top, window.innerHeight - 120)),
+                        transform: 'translateY(0)',
+                        background: '#141414',
+                        color: '#fff',
+                        padding: isMobileLayout ? '12px 14px' : '8px 10px',
+                        borderRadius: 8,
+                        zIndex: 4000,
+                        maxWidth: isMobileLayout ? '86vw' : 300,
+                        boxShadow: '0 6px 18px rgba(0,0,0,0.6)',
+                        fontSize: isMobileLayout ? 14 : 12,
+                    }}
+                >
+                    {tooltipState.text}
                 </div>
             )}
         </div>
