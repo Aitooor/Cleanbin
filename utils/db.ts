@@ -223,6 +223,8 @@ interface DatabaseBackend {
   updatePasteName(id: string, newName: string): Promise<Paste | null>;
   deleteExpiredPastes(): Promise<void>;
   getAllPastes(): Promise<Paste[]>;
+  // efficient pagination: return total and items for given page (1-based) and limit
+  getPastes(page: number, limit: number): Promise<{ total: number; items: Paste[] }>;
 }
 
 class JsonDatabase implements DatabaseBackend {
@@ -235,6 +237,28 @@ class JsonDatabase implements DatabaseBackend {
   }
   private getFilePath(id: string) {
     return pathModule!.join(this.jsonPath, `${id}.json`);
+  }
+  async getPastes(page: number, limit: number) {
+    this.ensureServer();
+    // fallback: read all, sort by createdAt desc, then slice
+    const files = await fs!.readdir(this.jsonPath).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === 'ENOENT') return [];
+      throw e;
+    });
+    const items: Paste[] = [];
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const filePath = pathModule!.join(this.jsonPath, file);
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      items.push(JSON.parse(decompressed.toString('utf-8')));
+    }
+    // sort by createdAt desc
+    items.sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1));
+    const total = items.length;
+    const start = (page - 1) * limit;
+    const pageItems = items.slice(start, start + limit);
+    return { total, items: pageItems };
   }
   async savePaste(id: string, content: string, name: string, permanent: boolean) {
     this.ensureServer();
@@ -352,6 +376,9 @@ class NotImplementedDB implements DatabaseBackend {
   async getAllPastes(): Promise<Paste[]> {
     return [];
   }
+  async getPastes(page: number, limit: number): Promise<{ total: number; items: Paste[] }> {
+    return { total: 0, items: [] };
+  }
 }
 
 function createDatabase(): DatabaseBackend {
@@ -425,6 +452,20 @@ function createDatabase(): DatabaseBackend {
             })
           );
         },
+      getPastes: async (page: number, limit: number) => {
+        const totalRow = db.prepare('SELECT COUNT(*) as c FROM pastes').get();
+        const total = totalRow ? totalRow.c : 0;
+        const offset = (page - 1) * limit;
+        const rows = db.prepare('SELECT payload FROM pastes ORDER BY ROWID DESC LIMIT ? OFFSET ?').all(limit, offset);
+        const items = await Promise.all(
+          rows.map(async (r: any) => {
+            const buf = Buffer.from(r.payload, 'base64');
+            const decompressed = await decompressBuffer(buf);
+            return JSON.parse(decompressed.toString('utf-8'));
+          })
+        );
+        return { total, items };
+      },
       };
     } catch (err) {
       throw new Error('SQLite selected but "better-sqlite3" is not installed. npm i better-sqlite3');
@@ -492,6 +533,21 @@ function createDatabase(): DatabaseBackend {
               return JSON.parse(decompressed.toString('utf-8'));
             })
           );
+        },
+        getPastes: async (page: number, limit: number) => {
+          const coll = await collPromise;
+          const total = await coll.countDocuments();
+          const offset = (page - 1) * limit;
+          const docs = await coll.find().skip(offset).limit(limit).toArray();
+          const items = await Promise.all(
+            docs.map(async (d: any) => {
+              if (!d.payload) return null;
+              const buf = Buffer.from(d.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+          return { total, items };
         },
       };
     } catch (err) {
@@ -563,6 +619,20 @@ function createDatabase(): DatabaseBackend {
             })
           );
         },
+        getPastes: async (page: number, limit: number) => {
+          const [{ count }] = await knex('pastes').count('* as count');
+          const total = Number(count || 0);
+          const offset = (page - 1) * limit;
+          const rows = await knex('pastes').select('payload').orderBy('rowid', 'desc').limit(limit).offset(offset);
+          const items = await Promise.all(
+            rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+          return { total, items };
+        },
       };
     } catch (err) {
       throw new Error('SQL DB selected but required drivers (knex + client) are not installed. npm i knex pg mysql2');
@@ -618,6 +688,20 @@ function createDatabase(): DatabaseBackend {
             })
           );
         },
+        getPastes: async (page: number, limit: number) => {
+          // Cassandra does not support OFFSET efficiently; fallback to scanning (inefficient)
+          const res = await client.execute('SELECT payload FROM pastes');
+          const itemsAll = await Promise.all(
+            res.rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+          const total = itemsAll.length;
+          const start = (page - 1) * limit;
+          return { total, items: itemsAll.slice(start, start + limit) };
+        },
       };
     } catch (err) {
       throw new Error('Cassandra selected but "cassandra-driver" is not installed. npm i cassandra-driver');
@@ -654,4 +738,7 @@ export async function getAllPastes() {
 
 export async function fetchPastes() {
   return await getAllPastes();
+}
+export async function getPastes(page: number, limit: number) {
+  return await db.getPastes(page, limit);
 }

@@ -18,22 +18,46 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [mounted, setMounted] = useState(false);
     const router = useRouter();
     const { addNotification } = useNotification();
+    const [page, setPage] = useState(1);
+    const [limit] = useState(50);
+    const [total, setTotal] = useState(0);
+    const [loading, setLoading] = useState(false);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const sentinelRef = React.useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
         setMounted(true);
     }, []);
 
     useEffect(() => {
-        const fetchData = async () => {
-            const response = await fetch('/api/pastes');
-            if (response.ok) {
-                const data: Paste[] = await response.json();
-                setPastes(data);
-                setFilteredPastes(data); // Inicializar los pastes filtrados
+        const fetchPage = async (p: number) => {
+            try {
+                if (p === 1) setLoading(true);
+                else setLoadingMore(true);
+                const response = await fetch(`/api/pastes?page=${p}&limit=${limit}`);
+                if (response.ok) {
+                    const body = await response.json();
+                    const items: Paste[] = body.items || [];
+                    const totalCount: number = body.total || 0;
+                    if (p === 1) {
+                        setPastes(items);
+                        setFilteredPastes(items);
+                    } else {
+                        setPastes((prev) => {
+                            const merged = [...prev, ...items];
+                            setFilteredPastes(merged);
+                            return merged;
+                        });
+                    }
+                    setTotal(totalCount);
+                }
+            } finally {
+                setLoading(false);
+                setLoadingMore(false);
             }
         };
-        fetchData();
-    }, []);
+        fetchPage(1);
+    }, [limit]);
 
     useEffect(() => {
         // Filtrar los pastes según el término de búsqueda
@@ -47,6 +71,45 @@ const Dashboard: React.FC<DashboardProps> = () => {
             )
         );
     }, [searchTerm, pastes]);
+
+    // infinite scroll observer
+    useEffect(() => {
+        if (!sentinelRef.current) return;
+        const obs = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting && !loadingMore && pastes.length < total) {
+                        setPage((p) => p + 1);
+                    }
+                });
+            },
+            { root: null, rootMargin: '200px', threshold: 0.1 }
+        );
+        obs.observe(sentinelRef.current);
+        return () => obs.disconnect();
+    }, [sentinelRef.current, loadingMore, pastes.length, total]);
+
+    useEffect(() => {
+        if (page === 1) return;
+        const load = async () => {
+            try {
+                setLoadingMore(true);
+                const response = await fetch(`/api/pastes?page=${page}&limit=${limit}`);
+                if (response.ok) {
+                    const body = await response.json();
+                    const items: Paste[] = body.items || [];
+                    setPastes((prev) => {
+                        const merged = [...prev, ...items];
+                        setFilteredPastes(merged);
+                        return merged;
+                    });
+                }
+            } finally {
+                setLoadingMore(false);
+            }
+        };
+        load();
+    }, [page, limit]);
 
     interface Paste {
         id: string;
@@ -196,7 +259,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     }}
                 >
                     <div style={{ fontSize: '13px', color: '#666' }}>Total</div>
-                    <div style={{ fontSize: '22px', fontWeight: 700 }}>{pastes.length}</div>
+                    <div style={{ fontSize: '22px', fontWeight: 700 }}>{total || pastes.length}</div>
                 </div>
                 <div
                     style={{
@@ -361,6 +424,17 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             ))}
                         </tbody>
                     </table>
+                    <div ref={sentinelRef} style={{ height: 1 }} />
+                    <div style={{ padding: 12, textAlign: 'center' }}>
+                        {loading && <div>Loading...</div>}
+                        {loadingMore && <div>Loading more...</div>}
+                        {!loading && !loadingMore && pastes.length < total && (
+                            <button onClick={() => setPage((p) => p + 1)} style={{ padding: '8px 12px' }}>
+                                Load more
+                            </button>
+                        )}
+                        {!loading && !loadingMore && pastes.length >= total && <div>All loaded</div>}
+                    </div>
                 </div>
             </div>
             {showRenameModal && (
