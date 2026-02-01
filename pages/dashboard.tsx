@@ -38,6 +38,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [summaryItems, setSummaryItems] = useState<any[]>([]);
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [isMobileLayout, setIsMobileLayout] = useState(false);
+    const [showStayOrCloseAfterPicks, setShowStayOrCloseAfterPicks] = useState(false);
+    const [addedPicksCount, setAddedPicksCount] = useState(0);
     const [tooltipState, setTooltipState] = useState<{ visible: boolean; text: string; left: number; top: number }>({
         visible: false,
         text: '',
@@ -386,6 +388,13 @@ const Dashboard: React.FC<DashboardProps> = () => {
         setShowDeleteModal(false);
         setDeletePayload(null);
         setConfirmStage(0);
+        setShowStayOrCloseAfterPicks(false);
+    };
+
+    const closeDeleteModalKeepingData = () => {
+        setShowDeleteModal(false);
+        setConfirmStage(0);
+        setShowStayOrCloseAfterPicks(false);
     };
 
     const performBulkDelete = async () => {
@@ -631,7 +640,19 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             Delete Temporary
                         </button>
                         <button
-                            onClick={() => openDeleteModal({ mode: 'filtered', filter: searchTerm })}
+                            onClick={() => {
+                                if (!showDeleteModal && deletePayload?.mode === 'filtered') {
+                                    setShowDeleteModal(true);
+                                    setConfirmStage(1);
+                                    setShowStayOrCloseAfterPicks(false);
+                                    setPreviewItems([]);
+                                    setPreviewSelectedIds(new Set());
+                                    setPreviewPage(1);
+                                    setPreviewPageSize(10);
+                                } else {
+                                    openDeleteModal({ mode: 'filtered', filter: searchTerm });
+                                }
+                            }}
                             style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
                         >
                             Delete Filtered
@@ -1288,13 +1309,15 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                 <button
                                                     title="Adds the items you've checked in this preview to the dashboard 'Selected' list above"
                                                     onClick={() => {
-                                                        // add selected preview ids to global selected
+                                                        const count = previewSelectedIds.size;
                                                         setSelectedIds((prev) => {
                                                             const copy = new Set(prev);
                                                             for (const id of previewSelectedIds) copy.add(id);
                                                             return copy;
                                                         });
-                                                        addNotification(`${previewSelectedIds.size} items added to Selected.`);
+                                                        setAddedPicksCount(count);
+                                                        setShowStayOrCloseAfterPicks(true);
+                                                        addNotification(`${count} item${count === 1 ? '' : 's'} added to Selected.`);
                                                     }}
                                                     style={{
                                                         background: '#722ed1',
@@ -1343,6 +1366,25 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                     ?
                                                 </button>
                                             </>
+                                        )}
+                                        {showStayOrCloseAfterPicks && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                                                <span style={{ color: '#bbb', fontSize: 13 }}>
+                                                    {addedPicksCount} item{addedPicksCount === 1 ? '' : 's'} added. Stay here or close modal (selection saved)?
+                                                </span>
+                                                <button
+                                                    onClick={() => setShowStayOrCloseAfterPicks(false)}
+                                                    style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}
+                                                >
+                                                    Stay here
+                                                </button>
+                                                <button
+                                                    onClick={closeDeleteModalKeepingData}
+                                                    style={{ background: '#2a7f2a', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}
+                                                >
+                                                    Close modal
+                                                </button>
+                                            </div>
                                         )}
                                         {/* Continue to final confirmation button removed — use "Preview sample & continue" above */}
                                     </div>
