@@ -40,6 +40,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [isMobileLayout, setIsMobileLayout] = useState(false);
     const [showStayOrCloseAfterPicks, setShowStayOrCloseAfterPicks] = useState(false);
     const [addedPicksCount, setAddedPicksCount] = useState(0);
+    const [addedFromPreviewIds, setAddedFromPreviewIds] = useState<Set<string>>(new Set());
     const [tooltipState, setTooltipState] = useState<{ visible: boolean; text: string; left: number; top: number }>({
         visible: false,
         text: '',
@@ -382,6 +383,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
         setPreviewSelectedIds(new Set());
         setPreviewPage(1);
         setPreviewPageSize(10);
+        setAddedFromPreviewIds(new Set());
     };
 
     const closeDeleteModal = () => {
@@ -389,6 +391,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
         setDeletePayload(null);
         setConfirmStage(0);
         setShowStayOrCloseAfterPicks(false);
+        setAddedFromPreviewIds(new Set());
     };
 
     const closeDeleteModalKeepingData = () => {
@@ -1279,21 +1282,28 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                 <div>{String(p.permanent) === 'true' || p.permanent === true ? 'Yes' : 'No'}</div>
                                                 {confirmStage !== 2 && (
                                                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                                                        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={previewSelectedIds.has(p.id)}
-                                                                onChange={() => {
-                                                                    setPreviewSelectedIds(prev => {
-                                                                        const copy = new Set(prev);
-                                                                        if (copy.has(p.id)) copy.delete(p.id);
-                                                                        else copy.add(p.id);
-                                                                        return copy;
-                                                                    });
-                                                                }}
-                                                            />
-                                                            <span style={{ color: '#ccc' }}>Select</span>
-                                                        </label>
+                                                        {addedFromPreviewIds.has(p.id) ? (
+                                                            <span style={{ color: '#666', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                                <input type="checkbox" disabled checked style={{ opacity: 0.6, cursor: 'not-allowed' }} />
+                                                                Added
+                                                            </span>
+                                                        ) : (
+                                                            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={previewSelectedIds.has(p.id)}
+                                                                    onChange={() => {
+                                                                        setPreviewSelectedIds(prev => {
+                                                                            const copy = new Set(prev);
+                                                                            if (copy.has(p.id)) copy.delete(p.id);
+                                                                            else copy.add(p.id);
+                                                                            return copy;
+                                                                        });
+                                                                    }}
+                                                                />
+                                                                <span style={{ color: '#ccc' }}>Select</span>
+                                                            </label>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
@@ -1309,11 +1319,22 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                 <button
                                                     title="Adds the items you've checked in this preview to the dashboard 'Selected' list above"
                                                     onClick={() => {
-                                                        const count = previewSelectedIds.size;
+                                                        const idsToAdd = new Set(previewSelectedIds);
+                                                        const count = idsToAdd.size;
                                                         setSelectedIds((prev) => {
                                                             const copy = new Set(prev);
-                                                            for (const id of previewSelectedIds) copy.add(id);
+                                                            for (const id of idsToAdd) copy.add(id);
                                                             return copy;
+                                                        });
+                                                        setPreviewSelectedIds((prev) => {
+                                                            const next = new Set(prev);
+                                                            for (const id of idsToAdd) next.delete(id);
+                                                            return next;
+                                                        });
+                                                        setAddedFromPreviewIds((prev) => {
+                                                            const next = new Set(prev);
+                                                            for (const id of idsToAdd) next.add(id);
+                                                            return next;
                                                         });
                                                         setAddedPicksCount(count);
                                                         setShowStayOrCloseAfterPicks(true);
