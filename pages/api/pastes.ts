@@ -12,6 +12,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const force = req.query.force === '1';
       const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
       const limit = Math.min(1000, Math.max(1, parseInt((req.query.limit as string) || '50', 10)));
+      const preview = req.query.preview === '1' || !!req.query.filterRules || !!req.query.filter;
+      const idsOnly = req.query.ids_only === '1';
+      const matchMode = (req.query.matchMode as string) || 'AND';
       // If client provided a token (Cassandra), bypass cached pages and use DB directly
       const token = (req.query.token as string) || undefined;
       if (token) {
@@ -19,6 +22,73 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         res.setHeader('Cache-Control', `public, max-age=5`);
         return res.status(200).json({ total: result.total, page, limit, items: result.items, nextPageToken: result.nextPageToken || null });
       }
+      // If preview/filtering requested, perform server-side filtering and pagination
+      if (preview) {
+        // Accept filterRules as JSON string in query or simple filter/filterField
+        const filter = (req.query.filter as string) || undefined;
+        const filterField = (req.query.filterField as string) || undefined;
+        const filterRulesRaw = (req.query.filterRules as string) || undefined;
+        let filterRules: any[] | undefined;
+        if (filterRulesRaw) {
+          try {
+            filterRules = JSON.parse(filterRulesRaw);
+          } catch (e) {
+            filterRules = undefined;
+          }
+        }
+        // Fetch all items (limited to MAX_SCAN to avoid huge memory usage)
+        const MAX_SCAN = Number(process.env.PREVIEW_MAX_SCAN || 10000);
+        const all = await getAllPastes();
+        const scanned = all.slice(0, MAX_SCAN);
+
+        const applyRule = (r: any, item: any) => {
+          const val = ('' + (r.value || '')).toLowerCase();
+          const fieldVal =
+            r.field === 'name' ? (item.name || '') : r.field === 'content' ? (item.content || '') : r.field === 'id' ? (item.id || '') : (item.name || '') + ' ' + (item.content || '') + ' ' + (item.id || '');
+          const fv = ('' + fieldVal).toLowerCase();
+          let matched = false;
+          if (r.op === 'contains') matched = fv.includes(val);
+          else if (r.op === 'exact') matched = fv === val;
+          else if (r.op === 'starts') matched = fv.startsWith(val);
+          else if (r.op === 'regex') {
+            try {
+              const re = new RegExp(r.value, 'i');
+              matched = re.test(fieldVal);
+            } catch (e) {
+              matched = false;
+            }
+          }
+          return r.negate ? !matched : matched;
+        };
+
+        let matchedItems = scanned;
+        if (Array.isArray(filterRules) && filterRules.length > 0) {
+          matchedItems = scanned.filter((item) => {
+            const results = filterRules.map((r) => applyRule(r, item));
+            if ((matchMode || 'AND').toUpperCase() === 'OR') return results.some(Boolean);
+            return results.every(Boolean);
+          });
+        } else if (filter && filter.trim()) {
+          const q = filter.toLowerCase();
+          if (filterField === 'name') {
+            matchedItems = scanned.filter((p: any) => (p.name || '').toLowerCase().includes(q));
+          } else if (filterField === 'content') {
+            matchedItems = scanned.filter((p: any) => (p.content || '').toLowerCase().includes(q));
+          } else if (filterField === 'id') {
+            matchedItems = scanned.filter((p: any) => (p.id || '').toLowerCase().includes(q));
+          } else {
+            matchedItems = scanned.filter((p: any) => (p.name || '').toLowerCase().includes(q) || (p.content || '').toLowerCase().includes(q) || (p.id || '').toLowerCase().includes(q));
+          }
+        }
+        const totalMatched = matchedItems.length;
+        const start = (page - 1) * limit;
+        const pageItems = matchedItems.slice(start, start + limit);
+        // if idsOnly requested, map to minimal representation
+        const items = idsOnly ? pageItems.map((p: any) => ({ id: p.id, name: p.name, permanent: p.permanent })) : pageItems;
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json({ total: totalMatched, page, limit, items, truncated: all.length > MAX_SCAN });
+      }
+
       const result = await getPage(page, limit, force);
       // Prevent client-side caching so dashboard always fetches fresh data immediately.
       // Server still uses in-memory cache for efficiency, but clients should not reuse older responses.
