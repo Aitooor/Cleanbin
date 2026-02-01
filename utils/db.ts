@@ -223,6 +223,8 @@ interface DatabaseBackend {
   updatePasteName(id: string, newName: string): Promise<Paste | null>;
   deleteExpiredPastes(): Promise<void>;
   getAllPastes(): Promise<Paste[]>;
+  // efficient pagination: return total, items and optional nextPageToken (for cassandra)
+  getPastes(page: number, limit: number, token?: string): Promise<{ total: number; items: Paste[]; nextPageToken?: string | null }>;
 }
 
 class JsonDatabase implements DatabaseBackend {
@@ -235,6 +237,28 @@ class JsonDatabase implements DatabaseBackend {
   }
   private getFilePath(id: string) {
     return pathModule!.join(this.jsonPath, `${id}.json`);
+  }
+  async getPastes(page: number, limit: number) {
+    this.ensureServer();
+    // fallback: read all, sort by createdAt desc, then slice
+    const files = await fs!.readdir(this.jsonPath).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === 'ENOENT') return [];
+      throw e;
+    });
+    const items: Paste[] = [];
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const filePath = pathModule!.join(this.jsonPath, file);
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      items.push(JSON.parse(decompressed.toString('utf-8')));
+    }
+    // sort by createdAt desc
+    items.sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1));
+    const total = items.length;
+    const start = (page - 1) * limit;
+    const pageItems = items.slice(start, start + limit);
+    return { total, items: pageItems, nextPageToken: null };
   }
   async savePaste(id: string, content: string, name: string, permanent: boolean) {
     this.ensureServer();
@@ -352,6 +376,9 @@ class NotImplementedDB implements DatabaseBackend {
   async getAllPastes(): Promise<Paste[]> {
     return [];
   }
+  async getPastes(page: number, limit: number, token?: string): Promise<{ total: number; items: Paste[]; nextPageToken?: string | null }> {
+    return { total: 0, items: [], nextPageToken: null };
+  }
 }
 
 function createDatabase(): DatabaseBackend {
@@ -425,6 +452,20 @@ function createDatabase(): DatabaseBackend {
             })
           );
         },
+      getPastes: async (page: number, limit: number) => {
+        const totalRow = db.prepare('SELECT COUNT(*) as c FROM pastes').get();
+        const total = totalRow ? totalRow.c : 0;
+        const offset = (page - 1) * limit;
+        const rows = db.prepare('SELECT payload FROM pastes ORDER BY ROWID DESC LIMIT ? OFFSET ?').all(limit, offset);
+        const items = await Promise.all(
+          rows.map(async (r: any) => {
+            const buf = Buffer.from(r.payload, 'base64');
+            const decompressed = await decompressBuffer(buf);
+            return JSON.parse(decompressed.toString('utf-8'));
+          })
+        );
+        return { total, items, nextPageToken: null };
+      },
       };
     } catch (err) {
       throw new Error('SQLite selected but "better-sqlite3" is not installed. npm i better-sqlite3');
@@ -492,6 +533,21 @@ function createDatabase(): DatabaseBackend {
               return JSON.parse(decompressed.toString('utf-8'));
             })
           );
+        },
+        getPastes: async (page: number, limit: number) => {
+          const coll = await collPromise;
+          const total = await coll.countDocuments();
+          const offset = (page - 1) * limit;
+          const docs = await coll.find().skip(offset).limit(limit).toArray();
+          const items = await Promise.all(
+            docs.map(async (d: any) => {
+              if (!d.payload) return null;
+              const buf = Buffer.from(d.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+          return { total, items, nextPageToken: null };
         },
       };
     } catch (err) {
@@ -563,6 +619,20 @@ function createDatabase(): DatabaseBackend {
             })
           );
         },
+        getPastes: async (page: number, limit: number) => {
+          const [{ count }] = await knex('pastes').count('* as count');
+          const total = Number(count || 0);
+          const offset = (page - 1) * limit;
+          const rows = await knex('pastes').select('payload').orderBy('rowid', 'desc').limit(limit).offset(offset);
+          const items = await Promise.all(
+            rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+          return { total, items, nextPageToken: null };
+        },
       };
     } catch (err) {
       throw new Error('SQL DB selected but required drivers (knex + client) are not installed. npm i knex pg mysql2');
@@ -618,6 +688,25 @@ function createDatabase(): DatabaseBackend {
             })
           );
         },
+        // token-based paging using driver pageState
+        getPastes: async (page: number, limit: number, token?: string | null) => {
+          // Use fetchSize and pageState for efficient paging
+          const query = 'SELECT payload FROM pastes';
+          const options: any = { prepare: true, fetchSize: limit };
+          if (token) options.pageState = token;
+          const res = await client.execute(query, [], options);
+          const items = await Promise.all(
+            res.rows.map(async (r: any) => {
+              const buf = Buffer.from(r.payload, 'base64');
+              const decompressed = await decompressBuffer(buf);
+              return JSON.parse(decompressed.toString('utf-8'));
+            })
+          );
+          // pageState is sent back to client to request next page
+          const nextPageToken = res.pageState || null;
+          // total is not provided efficiently in Cassandra; return -1
+          return { total: -1, items, nextPageToken };
+        },
       };
     } catch (err) {
       throw new Error('Cassandra selected but "cassandra-driver" is not installed. npm i cassandra-driver');
@@ -654,4 +743,8 @@ export async function getAllPastes() {
 
 export async function fetchPastes() {
   return await getAllPastes();
+}
+export async function getPastes(page: number, limit: number, token?: string | null) {
+  // pass through optional token to underlying db implementation
+  return await db.getPastes(page, limit, token ?? undefined);
 }
