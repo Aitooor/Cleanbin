@@ -223,8 +223,8 @@ interface DatabaseBackend {
   updatePasteName(id: string, newName: string): Promise<Paste | null>;
   deleteExpiredPastes(): Promise<void>;
   getAllPastes(): Promise<Paste[]>;
-  // efficient pagination: return total and items for given page (1-based) and limit
-  getPastes(page: number, limit: number): Promise<{ total: number; items: Paste[] }>;
+  // efficient pagination: return total, items and optional nextPageToken (for cassandra)
+  getPastes(page: number, limit: number, token?: string): Promise<{ total: number; items: Paste[]; nextPageToken?: string | null }>;
 }
 
 class JsonDatabase implements DatabaseBackend {
@@ -258,7 +258,7 @@ class JsonDatabase implements DatabaseBackend {
     const total = items.length;
     const start = (page - 1) * limit;
     const pageItems = items.slice(start, start + limit);
-    return { total, items: pageItems };
+    return { total, items: pageItems, nextPageToken: null };
   }
   async savePaste(id: string, content: string, name: string, permanent: boolean) {
     this.ensureServer();
@@ -376,8 +376,8 @@ class NotImplementedDB implements DatabaseBackend {
   async getAllPastes(): Promise<Paste[]> {
     return [];
   }
-  async getPastes(page: number, limit: number): Promise<{ total: number; items: Paste[] }> {
-    return { total: 0, items: [] };
+  async getPastes(page: number, limit: number, token?: string): Promise<{ total: number; items: Paste[]; nextPageToken?: string | null }> {
+    return { total: 0, items: [], nextPageToken: null };
   }
 }
 
@@ -464,7 +464,7 @@ function createDatabase(): DatabaseBackend {
             return JSON.parse(decompressed.toString('utf-8'));
           })
         );
-        return { total, items };
+        return { total, items, nextPageToken: null };
       },
       };
     } catch (err) {
@@ -547,7 +547,7 @@ function createDatabase(): DatabaseBackend {
               return JSON.parse(decompressed.toString('utf-8'));
             })
           );
-          return { total, items };
+          return { total, items, nextPageToken: null };
         },
       };
     } catch (err) {
@@ -631,7 +631,7 @@ function createDatabase(): DatabaseBackend {
               return JSON.parse(decompressed.toString('utf-8'));
             })
           );
-          return { total, items };
+          return { total, items, nextPageToken: null };
         },
       };
     } catch (err) {
@@ -688,19 +688,24 @@ function createDatabase(): DatabaseBackend {
             })
           );
         },
-        getPastes: async (page: number, limit: number) => {
-          // Cassandra does not support OFFSET efficiently; fallback to scanning (inefficient)
-          const res = await client.execute('SELECT payload FROM pastes');
-          const itemsAll = await Promise.all(
+        // token-based paging using driver pageState
+        getPastes: async (page: number, limit: number, token?: string | null) => {
+          // Use fetchSize and pageState for efficient paging
+          const query = 'SELECT payload FROM pastes';
+          const options: any = { prepare: true, fetchSize: limit };
+          if (token) options.pageState = token;
+          const res = await client.execute(query, [], options);
+          const items = await Promise.all(
             res.rows.map(async (r: any) => {
               const buf = Buffer.from(r.payload, 'base64');
               const decompressed = await decompressBuffer(buf);
               return JSON.parse(decompressed.toString('utf-8'));
             })
           );
-          const total = itemsAll.length;
-          const start = (page - 1) * limit;
-          return { total, items: itemsAll.slice(start, start + limit) };
+          // pageState is sent back to client to request next page
+          const nextPageToken = res.pageState || null;
+          // total is not provided efficiently in Cassandra; return -1
+          return { total: -1, items, nextPageToken };
         },
       };
     } catch (err) {
@@ -739,6 +744,7 @@ export async function getAllPastes() {
 export async function fetchPastes() {
   return await getAllPastes();
 }
-export async function getPastes(page: number, limit: number) {
-  return await db.getPastes(page, limit);
+export async function getPastes(page: number, limit: number, token?: string | null) {
+  // pass through optional token to underlying db implementation
+  return await db.getPastes(page, limit, token ?? undefined);
 }

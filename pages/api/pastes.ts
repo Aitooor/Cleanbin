@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { parse } from 'cookie';
-import { savePaste } from '../../utils/db';
+import { savePaste, getPastes } from '../../utils/db';
 import { getPage, invalidateCache, startPrecache } from '../../utils/pastesCache';
 import config from '../../utils/config';
 
@@ -10,6 +10,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const force = req.query.force === '1';
       const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
       const limit = Math.min(1000, Math.max(1, parseInt((req.query.limit as string) || '50', 10)));
+      // If client provided a token (Cassandra), bypass cached pages and use DB directly
+      const token = (req.query.token as string) || undefined;
+      if (token) {
+        const result = await getPastes(page, limit, token);
+        res.setHeader('Cache-Control', `public, max-age=5`);
+        return res.status(200).json({ total: result.total, page, limit, items: result.items, nextPageToken: result.nextPageToken || null });
+      }
       const result = await getPage(page, limit, force);
       // Set caching headers for clients (short), server uses in-memory cache for heavy loads
       res.setHeader('Cache-Control', `public, max-age=${Math.min(60, Math.floor((config.cache.ttl || 3600)))}`);

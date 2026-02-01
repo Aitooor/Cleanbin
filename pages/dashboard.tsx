@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+// Using simple list rendering for stability (virtualization removed temporarily)
 import { useRouter } from 'next/router';
 import { useNotification } from 'components/NotificationProvider';
 import { FaTrash, FaClipboard, FaEye } from 'react-icons/fa';
@@ -18,45 +19,39 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [mounted, setMounted] = useState(false);
     const router = useRouter();
     const { addNotification } = useNotification();
-    const [page, setPage] = useState(1);
     const [limit] = useState(50);
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
+    const [nextToken, setNextToken] = useState<string | null | undefined>(undefined);
     const sentinelRef = React.useRef<HTMLDivElement | null>(null);
+    // simpler: always render fallback list
+
+    // no dynamic import
 
     useEffect(() => {
         setMounted(true);
     }, []);
 
     useEffect(() => {
-        const fetchPage = async (p: number) => {
+        const fetchInitial = async () => {
             try {
-                if (p === 1) setLoading(true);
-                else setLoadingMore(true);
-                const response = await fetch(`/api/pastes?page=${p}&limit=${limit}`);
+                setLoading(true);
+                const response = await fetch(`/api/pastes?page=1&limit=${limit}`);
                 if (response.ok) {
                     const body = await response.json();
                     const items: Paste[] = body.items || [];
-                    const totalCount: number = body.total || 0;
-                    if (p === 1) {
-                        setPastes(items);
-                        setFilteredPastes(items);
-                    } else {
-                        setPastes((prev) => {
-                            const merged = [...prev, ...items];
-                            setFilteredPastes(merged);
-                            return merged;
-                        });
-                    }
-                    setTotal(totalCount);
+                    setPastes(items);
+                    setFilteredPastes(items);
+                    if (typeof body.total === 'number' && body.total >= 0) setTotal(body.total);
+                    // prefer token if backend provides it
+                    setNextToken(body.nextPageToken ?? null);
                 }
-            } finally {
+                } finally {
                 setLoading(false);
-                setLoadingMore(false);
             }
         };
-        fetchPage(1);
+        fetchInitial();
     }, [limit]);
 
     useEffect(() => {
@@ -73,13 +68,39 @@ const Dashboard: React.FC<DashboardProps> = () => {
     }, [searchTerm, pastes]);
 
     // infinite scroll observer
+    const loadMore = async () => {
+        if (loadingMore) return;
+        try {
+            setLoadingMore(true);
+            // if we have a token, use token-based paging; otherwise use page param (backend supports both)
+            const tokenParam = nextToken ? `&token=${encodeURIComponent(nextToken)}` : '';
+            const response = await fetch(`/api/pastes?page=1&limit=${limit}${tokenParam}`);
+            if (response.ok) {
+                const body = await response.json();
+                const items: Paste[] = body.items || [];
+                setPastes((prev) => {
+                    const merged = [...prev, ...items];
+                    setFilteredPastes(merged);
+                    return merged;
+                });
+                if (typeof body.total === 'number' && body.total >= 0) setTotal(body.total);
+                setNextToken(body.nextPageToken ?? null);
+            }
+        } finally {
+            setLoadingMore(false);
+        }
+    };
+
     useEffect(() => {
         if (!sentinelRef.current) return;
         const obs = new IntersectionObserver(
             (entries) => {
                 entries.forEach((entry) => {
-                    if (entry.isIntersecting && !loadingMore && pastes.length < total) {
-                        setPage((p) => p + 1);
+                    if (entry.isIntersecting && !loadingMore) {
+                        // if total is known and we've loaded all, do nothing
+                        if (total > 0 && pastes.length >= total) return;
+                        if (nextToken === null && total > 0 && pastes.length >= total) return;
+                        loadMore();
                     }
                 });
             },
@@ -87,29 +108,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
         );
         obs.observe(sentinelRef.current);
         return () => obs.disconnect();
-    }, [sentinelRef.current, loadingMore, pastes.length, total]);
-
-    useEffect(() => {
-        if (page === 1) return;
-        const load = async () => {
-            try {
-                setLoadingMore(true);
-                const response = await fetch(`/api/pastes?page=${page}&limit=${limit}`);
-                if (response.ok) {
-                    const body = await response.json();
-                    const items: Paste[] = body.items || [];
-                    setPastes((prev) => {
-                        const merged = [...prev, ...items];
-                        setFilteredPastes(merged);
-                        return merged;
-                    });
-                }
-            } finally {
-                setLoadingMore(false);
-            }
-        };
-        load();
-    }, [page, limit]);
+    }, [sentinelRef.current, loadingMore, pastes.length, total, nextToken]);
 
     interface Paste {
         id: string;
@@ -292,138 +291,44 @@ const Dashboard: React.FC<DashboardProps> = () => {
             <div className="dashboard-content">
                 <div className="card">
                     <h1 className="card-title">Pastes</h1>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>UUID</th>
-                                <th>Permanent</th> {/* Nueva columna */}
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filteredPastes.map((paste) => (
-                                <tr key={paste.id}>
-                                    <td>{paste.name}</td>
-                                    <td
-                                        onClick={() => handleCopyToClipboard(paste.id)}
-                                        style={{ cursor: 'pointer', color: 'blue', textDecoration: 'underline' }}
-                                    >
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr 3fr', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222', fontWeight: 700 }}>
+                        <div>Name</div>
+                        <div>UUID</div>
+                        <div>Permanent</div>
+                        <div>Actions</div>
+                    </div>
+                    <div>
+                        {filteredPastes.length === 0 ? (
+                            <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>No pastes to show</div>
+                        ) : (
+                            filteredPastes.map((paste) => (
+                                <div key={paste.id} style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr 3fr', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #111' }}>
+                                    <div>{paste.name}</div>
+                                    <div onClick={() => handleCopyToClipboard(paste.id)} style={{ cursor: 'pointer', color: 'blue', textDecoration: 'underline' }}>
                                         {paste.id}
-                                    </td>
-                                    <td>{paste.permanent ? 'Yes' : 'No'}</td> {/* Mostrar correctamente el valor booleano */}
-                                    <td>
-                                        <div style={{ display: 'flex', gap: '10px' }}>
-                                            <button
-                                                className="button preview-button"
-                                                onClick={() => window.open(`/${paste.id}`, '_blank')}
-                                                style={{
-                                                    backgroundColor: '#52c41a',
-                                                    color: '#fff',
-                                                    border: 'none',
-                                                    borderRadius: '5px',
-                                                    padding: '8px 15px',
-                                                    cursor: 'pointer',
-                                                    transition: 'background-color 0.3s',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '5px',
-                                                }}
-                                                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#389e0d')}
-                                                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#52c41a')}
-                                            >
-                                                <FaEye />
-                                                Preview
-                                            </button>
-                                            <button
-                                                className="button copy-url-button"
-                                                onClick={() => handleCopyToClipboard(`${window.location.origin}/${paste.id}`, 'URL copied to clipboard')}
-                                                style={{
-                                                    backgroundColor: '#1890ff',
-                                                    color: '#fff',
-                                                    border: 'none',
-                                                    borderRadius: '5px',
-                                                    padding: '8px 15px',
-                                                    cursor: 'pointer',
-                                                    transition: 'background-color 0.3s',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '5px',
-                                                }}
-                                                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#096dd9')}
-                                                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#1890ff')}
-                                            >
-                                                <FaClipboard />
-                                                Copy URL
-                                            </button>
-                                            <button
-                                                className="button clone-button"
-                                                onClick={() => handleClonePaste(paste.id)}
-                                                style={{
-                                                    backgroundColor: '#1890ff',
-                                                    color: '#fff',
-                                                    border: 'none',
-                                                    borderRadius: '5px',
-                                                    padding: '8px 15px',
-                                                    cursor: 'pointer',
-                                                    transition: 'background-color 0.3s',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '5px',
-                                                }}
-                                                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#096dd9')}
-                                                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#1890ff')}
-                                            >
-                                                <FaClipboard />
-                                                Clone
-                                            </button>
-                                            <button
-                                                    className="button rename-button"
-                                                    onClick={() => openRenameModal(paste)}
-                                                    style={{
-                                                        backgroundColor: '#fa8c16',
-                                                        color: '#fff',
-                                                        border: 'none',
-                                                        borderRadius: '5px',
-                                                        padding: '8px 15px',
-                                                        cursor: 'pointer',
-                                                        transition: 'background-color 0.3s',
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: '5px',
-                                                    }}
-                                                    onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#d97706')}
-                                                    onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#fa8c16')}
-                                                >
-                                                    Rename
-                                                </button>
-                                            <button
-                                                className="button delete-button"
-                                                onClick={() => handleDeletePaste(paste.id)}
-                                                style={{
-                                                    backgroundColor: '#ff4d4f',
-                                                    color: '#fff',
-                                                    border: 'none',
-                                                    borderRadius: '5px',
-                                                    padding: '8px 15px',
-                                                    cursor: 'pointer',
-                                                    transition: 'background-color 0.3s',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '5px',
-                                                }}
-                                                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#d9363e')}
-                                                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#ff4d4f')}
-                                            >
-                                                <FaTrash />
-                                                Delete
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                                    </div>
+                                    <div>{paste.permanent ? 'Yes' : 'No'}</div>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <button className="button preview-button" onClick={() => window.open(`/${paste.id}`, '_blank')} style={{ backgroundColor: '#52c41a', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
+                                            <FaEye /> Preview
+                                        </button>
+                                        <button className="button copy-url-button" onClick={() => handleCopyToClipboard(`${window.location.origin}/${paste.id}`, 'URL copied to clipboard')} style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
+                                            <FaClipboard /> Copy URL
+                                        </button>
+                                        <button className="button clone-button" onClick={() => handleClonePaste(paste.id)} style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
+                                            <FaClipboard /> Clone
+                                        </button>
+                                        <button className="button rename-button" onClick={() => openRenameModal(paste)} style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
+                                            Rename
+                                        </button>
+                                        <button className="button delete-button" onClick={() => handleDeletePaste(paste.id)} style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
+                                            <FaTrash /> Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
                     <div ref={sentinelRef} style={{ height: 1 }} />
                     <div style={{ padding: 12, textAlign: 'center' }}>
                         {loading && <div>Loading...</div>}
