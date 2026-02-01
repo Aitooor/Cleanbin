@@ -1214,6 +1214,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                     <div style={{ display: 'flex', gap: 8 }}>
                                         {/* Close preview button removed */}
                                         <button
+                                            title="Adds the items you've checked in this preview to the dashboard 'Selected' list above"
                                             onClick={() => {
                                                 // add selected preview ids to global selected
                                                 setSelectedIds(prev => {
@@ -1221,12 +1222,13 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                     for (const id of previewSelectedIds) copy.add(id);
                                                     return copy;
                                                 });
-                                                addNotification(`${previewSelectedIds.size} items added to selection.`);
+                                                addNotification(`${previewSelectedIds.size} items added to Selected.`);
                                             }}
                                             style={{ background: '#722ed1', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6, marginLeft: 8 }}
                                         >
-                                            Add selected to selection ({previewSelectedIds.size})
+                                            Add preview picks to Selected ({previewSelectedIds.size})
                                         </button>
+                                        <div style={{ color: '#999', fontSize: 12, alignSelf: 'center' }}>Adds checked preview rows to the dashboard selection above.</div>
                                         {/* Continue to final confirmation button removed — use "Yes, continue" above */}
                                     </div>
                                 </div>
