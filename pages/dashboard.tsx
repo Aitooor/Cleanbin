@@ -31,6 +31,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [previewItems, setPreviewItems] = useState<any[]>([]);
     const [previewLoading, setPreviewLoading] = useState(false);
     const [showPreviewList, setShowPreviewList] = useState(false);
+    const [previewPage, setPreviewPage] = useState(1);
+    const [previewPageSize, setPreviewPageSize] = useState(10);
     const sentinelRef = React.useRef<HTMLDivElement | null>(null);
     // simpler: always render fallback list
 
@@ -173,6 +175,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
         if (!showDeleteModal || !deletePayload || deletePayload.mode !== 'filtered' || confirmStage !== 1) return;
         let mounted = true;
         let timer: number | undefined;
+        // reset to first page when filter changes
+        setPreviewPage(1);
         const doPreview = async () => {
             try {
                 setPreviewLoading(true);
@@ -184,18 +188,51 @@ const Dashboard: React.FC<DashboardProps> = () => {
                 }
                 const body = await response.json();
                 const allItems: any[] = body.items || [];
-                const ff = deletePayload.filterField || 'all';
-                let matched = allItems.filter((p) => {
+                // more advanced filter parsing: support comma-separated tokens, field:value, negation (-term), quoted phrases
+                const ff = (deletePayload.filterField || 'all');
+                const parsePredicate = (filterStr: string) => {
+                    const tokens: string[] = [];
+                    // simple tokenizer: split by comma, then trim
+                    for (const part of filterStr.split(',')) {
+                        const t = part.trim();
+                        if (!t) continue;
+                        tokens.push(t);
+                    }
+                    return (p: any) => {
+                        if (tokens.length === 0) return true;
+                        // token matching: all tokens must match (AND across tokens)
+                        return tokens.every((tok) => {
+                            let negate = false;
+                            let token = tok;
+                            if (token.startsWith('-')) {
+                                negate = true;
+                                token = token.slice(1);
+                            }
+                            // field:value
+                            const colonIdx = token.indexOf(':');
+                            let field = 'any';
+                            let value = token;
+                            if (colonIdx > 0) {
+                                field = token.slice(0, colonIdx).toLowerCase();
+                                value = token.slice(colonIdx + 1);
+                            }
+                            const valLower = value.replace(/^"(.*)"$/, '$1').toLowerCase();
+                            const matchField = (fval: any) => ('' + (fval || '')).toLowerCase().includes(valLower);
+                            let matched = false;
+                            if (field === 'name') matched = matchField(p.name);
+                            else if (field === 'content') matched = matchField(p.content);
+                            else if (field === 'id') matched = matchField(p.id);
+                            else {
+                                matched = matchField(p.name) || matchField(p.content) || matchField(p.id);
+                            }
+                            return negate ? !matched : matched;
+                        });
+                    };
+                };
+                const predicate = parsePredicate(q || '');
+                const matched = allItems.filter((p) => {
                     if (!q) return true;
-                    const low = q.toLowerCase();
-                    if (ff === 'name') return (p.name || '').toLowerCase().includes(low);
-                    if (ff === 'content') return (p.content || '').toLowerCase().includes(low);
-                    if (ff === 'id') return (p.id || '').toLowerCase().includes(low);
-                    return (
-                        (p.name || '').toLowerCase().includes(low) ||
-                        (p.content || '').toLowerCase().includes(low) ||
-                        (p.id || '').toLowerCase().includes(low)
-                    );
+                    return predicate(p);
                 });
                 if (!mounted) return;
                 setPreviewItems(matched);
@@ -274,6 +311,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
         } else if (deletePayload.mode === 'filtered') {
             body.filter = deletePayload.filter || '';
             if (deletePayload.filterField) body.filterField = deletePayload.filterField;
+            if (deletePayload.filterRules) body.filterRules = deletePayload.filterRules;
+            if (deletePayload.matchMode) body.matchMode = deletePayload.matchMode;
             body.type = 'all';
         } else if (deletePayload.mode === 'permanent' || deletePayload.mode === 'temporary' || deletePayload.mode === 'all') {
             body.type = deletePayload.mode === 'temporary' ? 'temporary' : deletePayload.mode;
@@ -699,61 +738,125 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                 : 'This is the final confirmation. Type DELETE to confirm permanently.'}
                         </p>
 
-                        {/* Filter options for "filtered" mode */}
+                        {/* Advanced filter builder for "filtered" mode */}
                         {deletePayload.mode === 'filtered' && confirmStage === 1 && (
                             <div style={{ marginBottom: 12 }}>
-                                <div style={{ marginBottom: 8, color: '#ddd' }}>Filter by:</div>
-                                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                                    <label style={{ color: '#ccc' }}>
-                                        <input
-                                            type="radio"
-                                            name="filterField"
-                                            checked={(deletePayload.filterField || 'all') === 'all'}
-                                            onChange={() => setDeletePayload((p: any) => ({ ...p, filterField: 'all' }))}
-                                        />{' '}
-                                        Any
-                                    </label>
-                                    <label style={{ color: '#ccc' }}>
-                                        <input
-                                            type="radio"
-                                            name="filterField"
-                                            checked={(deletePayload.filterField || '') === 'name'}
-                                            onChange={() => setDeletePayload((p: any) => ({ ...p, filterField: 'name' }))}
-                                        />{' '}
-                                        Name
-                                    </label>
-                                    <label style={{ color: '#ccc' }}>
-                                        <input
-                                            type="radio"
-                                            name="filterField"
-                                            checked={(deletePayload.filterField || '') === 'content'}
-                                            onChange={() => setDeletePayload((p: any) => ({ ...p, filterField: 'content' }))}
-                                        />{' '}
-                                        Content
-                                    </label>
-                                    <label style={{ color: '#ccc' }}>
-                                        <input
-                                            type="radio"
-                                            name="filterField"
-                                            checked={(deletePayload.filterField || '') === 'id'}
-                                            onChange={() => setDeletePayload((p: any) => ({ ...p, filterField: 'id' }))}
-                                        />{' '}
-                                        ID
-                                    </label>
+                                <div style={{ marginBottom: 8, color: '#ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>Filter builder</div>
+                                    <div style={{ color: '#ccc', fontSize: 12 }}>
+                                        Match mode:
+                                        <select
+                                            value={deletePayload.matchMode || 'AND'}
+                                            onChange={(e) => setDeletePayload((p: any) => ({ ...p, matchMode: e.target.value }))}
+                                            style={{ marginLeft: 6, background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: 4, padding: '2px 6px' }}
+                                        >
+                                            <option value="AND">All rules (AND)</option>
+                                            <option value="OR">Any rule (OR)</option>
+                                        </select>
+                                    </div>
                                 </div>
-                                <input
-                                    value={deletePayload.filter || ''}
-                                    onChange={(e) => setDeletePayload((p: any) => ({ ...p, filter: e.target.value }))}
-                                    placeholder="Filter text (e.g. part of name)"
-                                    style={{ width: '100%', padding: '10px', borderRadius: 6, marginBottom: 8, background: '#1a1a1a', border: '1px solid #333', color: '#fff' }}
-                                />
+
+                                {(deletePayload.filterRules || []).map((rule: any, idx: number) => (
+                                    <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                                        <select
+                                            value={rule.field || 'any'}
+                                            onChange={(e) =>
+                                                setDeletePayload((p: any) => {
+                                                    const rules = [...(p.filterRules || [])];
+                                                    rules[idx] = { ...rules[idx], field: e.target.value };
+                                                    return { ...p, filterRules: rules };
+                                                })
+                                            }
+                                            style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: 4, padding: '6px' }}
+                                        >
+                                            <option value="any">Any</option>
+                                            <option value="name">Name</option>
+                                            <option value="content">Content</option>
+                                            <option value="id">ID</option>
+                                        </select>
+                                        <select
+                                            value={rule.op || 'contains'}
+                                            onChange={(e) =>
+                                                setDeletePayload((p: any) => {
+                                                    const rules = [...(p.filterRules || [])];
+                                                    rules[idx] = { ...rules[idx], op: e.target.value };
+                                                    return { ...p, filterRules: rules };
+                                                })
+                                            }
+                                            style={{ background: '#1a1a1a', color: '#fff', border: '1px solid #333', borderRadius: 4, padding: '6px' }}
+                                        >
+                                            <option value="contains">Contains</option>
+                                            <option value="exact">Exact</option>
+                                            <option value="starts">Starts with</option>
+                                            <option value="regex">Regex</option>
+                                        </select>
+                                        <input
+                                            value={rule.value || ''}
+                                            onChange={(e) =>
+                                                setDeletePayload((p: any) => {
+                                                    const rules = [...(p.filterRules || [])];
+                                                    rules[idx] = { ...rules[idx], value: e.target.value };
+                                                    return { ...p, filterRules: rules };
+                                                })
+                                            }
+                                            placeholder='value (use quotes for phrases, prefix "-" to negate)'
+                                            style={{ flex: 1, padding: '8px', borderRadius: 6, background: '#1a1a1a', border: '1px solid #333', color: '#fff' }}
+                                        />
+                                        <label style={{ color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={!!rule.negate}
+                                                onChange={(e) =>
+                                                    setDeletePayload((p: any) => {
+                                                        const rules = [...(p.filterRules || [])];
+                                                        rules[idx] = { ...rules[idx], negate: e.target.checked };
+                                                        return { ...p, filterRules: rules };
+                                                    })
+                                                }
+                                            />
+                                            Not
+                                        </label>
+                                        <button
+                                            onClick={() =>
+                                                setDeletePayload((p: any) => {
+                                                    const rules = [...(p.filterRules || [])];
+                                                    rules.splice(idx, 1);
+                                                    return { ...p, filterRules: rules };
+                                                })
+                                            }
+                                            style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 6 }}
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                ))}
+
+                                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                                    <button
+                                        onClick={() =>
+                                            setDeletePayload((p: any) => ({
+                                                ...p,
+                                                filterRules: [...(p.filterRules || []), { field: 'any', op: 'contains', value: '', negate: false }],
+                                            }))
+                                        }
+                                        style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Add rule
+                                    </button>
+                                    <button
+                                        onClick={() => setDeletePayload((p: any) => ({ ...p, filterRules: [], previewCount: 0 }))}
+                                        style={{ backgroundColor: '#333', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
+                                    >
+                                        Clear rules
+                                    </button>
+                                </div>
+
                                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                                     <button
                                         onClick={async () => {
-                                            // manual preview trigger: fetch and show list
+                                            // manual preview trigger: use same client-side logic (will respect rules)
                                             try {
                                                 setPreviewLoading(true);
-                                                const q = deletePayload.filter || '';
                                                 const response = await fetch(`/api/pastes?page=1&limit=1000&force=1`);
                                                 if (!response.ok) {
                                                     addNotification('Failed to preview matches.');
@@ -762,21 +865,62 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                 }
                                                 const body = await response.json();
                                                 const allItems: any[] = body.items || [];
-                                                const ff = deletePayload.filterField || 'all';
-                                                let matched = allItems.filter((p) => {
-                                                    if (!q) return true;
-                                                    const low = q.toLowerCase();
-                                                    if (ff === 'name') return (p.name || '').toLowerCase().includes(low);
-                                                    if (ff === 'content') return (p.content || '').toLowerCase().includes(low);
-                                                    if (ff === 'id') return (p.id || '').toLowerCase().includes(low);
-                                                    return (
-                                                        (p.name || '').toLowerCase().includes(low) ||
-                                                        (p.content || '').toLowerCase().includes(low) ||
-                                                        (p.id || '').toLowerCase().includes(low)
-                                                    );
-                                                });
-                                                setPreviewItems(matched);
-                                                setDeletePayload((p: any) => ({ ...p, previewCount: matched.length }));
+                                                // apply rules locally (client uses same predicate as preview effect)
+                                                const rules = deletePayload.filterRules || [];
+                                                const matchMode = deletePayload.matchMode || 'AND';
+                                                const predicate = (item: any) => {
+                                                    if (!rules || rules.length === 0) return true;
+                                                    const evalRule = (r: any) => {
+                                                        const val = ('' + (r.value || '')).toLowerCase();
+                                                        const fieldVal =
+                                                            r.field === 'name' ? (item.name || '') : r.field === 'content' ? (item.content || '') : r.field === 'id' ? (item.id || '') : (item.name || '') + ' ' + (item.content || '') + ' ' + (item.id || '');
+                                                        let matched = false;
+                                                        const fv = ('' + fieldVal).toLowerCase();
+                                                        if (r.op === 'contains') matched = fv.includes(val);
+                                                        else if (r.op === 'exact') matched = fv === val;
+                                                        else if (r.op === 'starts') matched = fv.startsWith(val);
+                                                        else if (r.op === 'regex') {
+                                                            try {
+                                                                const re = new RegExp(r.value, 'i');
+                                                                matched = re.test(fieldVal);
+                                                            } catch (e) {
+                                                                matched = false;
+                                                            }
+                                                        }
+                                                        return r.negate ? !matched : matched;
+                                                    };
+                                                };
+                                                // reuse debounced preview logic by setting deletePayload.filter to trigger effect
+                                                setDeletePayload((p: any) => ({ ...p, previewCount: 0 }));
+                                                // trigger preview effect by updating state (it already listens to filterRules)
+                                                setPreviewItems(
+                                                    allItems.filter((item) => {
+                                                        const rules = deletePayload.filterRules || [];
+                                                        if (rules.length === 0) return true;
+                                                        const results = rules.map((r: any) => {
+                                                            const val = ('' + (r.value || '')).toLowerCase();
+                                                            const fieldVal =
+                                                                r.field === 'name' ? (item.name || '') : r.field === 'content' ? (item.content || '') : r.field === 'id' ? (item.id || '') : (item.name || '') + ' ' + (item.content || '') + ' ' + (item.id || '');
+                                                            const fv = ('' + fieldVal).toLowerCase();
+                                                            let matched = false;
+                                                            if (r.op === 'contains') matched = fv.includes(val);
+                                                            else if (r.op === 'exact') matched = fv === val;
+                                                            else if (r.op === 'starts') matched = fv.startsWith(val);
+                                                            else if (r.op === 'regex') {
+                                                                try {
+                                                                    const re = new RegExp(r.value, 'i');
+                                                                    matched = re.test(fieldVal);
+                                                                } catch (e) {
+                                                                    matched = false;
+                                                                }
+                                                            }
+                                                            return r.negate ? !matched : matched;
+                                                        });
+                                                        if ((deletePayload.matchMode || 'AND') === 'AND') return results.every(Boolean);
+                                                        return results.some(Boolean);
+                                                    })
+                                                );
+                                                setDeletePayload((p: any) => ({ ...p, previewCount: previewItems.length }));
                                                 setShowPreviewList(true);
                                             } catch (err) {
                                                 addNotification('Preview failed.');
@@ -834,7 +978,34 @@ const Dashboard: React.FC<DashboardProps> = () => {
                         </div>
                         {/* Preview list */}
                         {showPreviewList && previewItems && (
-                            <div style={{ marginTop: 16, maxHeight: 240, overflow: 'auto', borderTop: '1px solid #222', paddingTop: 12 }}>
+                            <div style={{ marginTop: 16, maxHeight: 360, overflow: 'auto', borderTop: '1px solid #222', paddingTop: 12 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                    <div style={{ fontWeight: 700, color: '#ddd' }}>Preview</div>
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                        <div style={{ color: '#ccc' }}>Page</div>
+                                        <button
+                                            onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
+                                            disabled={previewPage === 1}
+                                            style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 6, cursor: previewPage === 1 ? 'not-allowed' : 'pointer' }}
+                                        >
+                                            Prev
+                                        </button>
+                                        <div style={{ color: '#ccc' }}>{previewPage}</div>
+                                        <button
+                                            onClick={() => setPreviewPage((p) => p + 1)}
+                                            disabled={previewPage * previewPageSize >= (previewItems?.length || 0)}
+                                            style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 8px', borderRadius: 6, cursor: previewPage * previewPageSize >= (previewItems?.length || 0) ? 'not-allowed' : 'pointer' }}
+                                        >
+                                            Next
+                                        </button>
+                                        <select value={previewPageSize} onChange={(e) => { setPreviewPageSize(Number(e.target.value)); setPreviewPage(1); }} style={{ background: '#222', color: '#fff', border: '1px solid #333', padding: '6px', borderRadius: 6 }}>
+                                            <option value={5}>5</option>
+                                            <option value={10}>10</option>
+                                            <option value={25}>25</option>
+                                            <option value={50}>50</option>
+                                        </select>
+                                    </div>
+                                </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, padding: '6px 8px', fontWeight: 700, borderBottom: '1px solid #222' }}>
                                     <div>Name</div>
                                     <div>UUID</div>
@@ -845,18 +1016,25 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                 ) : previewItems.length === 0 ? (
                                     <div style={{ padding: 12, color: '#999' }}>No matches</div>
                                 ) : (
-                                    previewItems.map((p) => (
-                                        <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
-                                            <div>{p.name}</div>
-                                            <div style={{ color: 'blue', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { navigator.clipboard?.writeText(p.id); addNotification('UUID copied'); }}>
-                                                {p.id}
+                                    (() => {
+                                        const start = (previewPage - 1) * previewPageSize;
+                                        const pageItems = previewItems.slice(start, start + previewPageSize);
+                                        return pageItems.map((p) => (
+                                            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
+                                                <div>{p.name}</div>
+                                                <div style={{ color: 'blue', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { navigator.clipboard?.writeText(p.id); addNotification('UUID copied'); }}>
+                                                    {p.id}
+                                                </div>
+                                                <div>{String(p.permanent) === 'true' || p.permanent === true ? 'Yes' : 'No'}</div>
                                             </div>
-                                            <div>{String(p.permanent) === 'true' || p.permanent === true ? 'Yes' : 'No'}</div>
-                                        </div>
-                                    ))
+                                        ));
+                                    })()
                                 )}
-                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-                                    <button onClick={() => setShowPreviewList(false)} style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6 }}>Close preview</button>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                                    <div style={{ color: '#ccc' }}>{previewItems.length} total</div>
+                                    <div>
+                                        <button onClick={() => setShowPreviewList(false)} style={{ background: '#333', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6 }}>Close preview</button>
+                                    </div>
                                 </div>
                             </div>
                         )}

@@ -77,7 +77,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // all or other
           toDeleteIds = all.map((p: any) => p.id);
         }
-        if (filter && filter.trim()) {
+        // advanced filter: either simple `filter`+`filterField` or structured `filterRules` with `matchMode`
+        const filterRules: any[] | undefined = Array.isArray(body.filterRules) ? body.filterRules : undefined;
+        const matchMode = (body.matchMode || (req.query.matchMode as string) || 'AND').toUpperCase();
+        if (filterRules && filterRules.length > 0) {
+          const applyRule = (r: any, item: any) => {
+            const val = ('' + (r.value || '')).toLowerCase();
+            const fieldVal =
+              r.field === 'name' ? (item.name || '') : r.field === 'content' ? (item.content || '') : r.field === 'id' ? (item.id || '') : (item.name || '') + ' ' + (item.content || '') + ' ' + (item.id || '');
+            const fv = ('' + fieldVal).toLowerCase();
+            let matched = false;
+            if (r.op === 'contains') matched = fv.includes(val);
+            else if (r.op === 'exact') matched = fv === val;
+            else if (r.op === 'starts') matched = fv.startsWith(val);
+            else if (r.op === 'regex') {
+              try {
+                const re = new RegExp(r.value, 'i');
+                matched = re.test(fieldVal);
+              } catch (e) {
+                matched = false;
+              }
+            }
+            return r.negate ? !matched : matched;
+          };
+          const filtered = all.filter((item) => {
+            const results = filterRules.map((r) => applyRule(r, item));
+            if (matchMode === 'OR') return results.some(Boolean);
+            return results.every(Boolean);
+          }).map((p: any) => p.id);
+          // intersect with base toDeleteIds (respect type)
+          const baseSet = new Set(toDeleteIds);
+          toDeleteIds = filtered.filter((id) => baseSet.has(id));
+        } else if (filter && filter.trim()) {
           const q = filter.toLowerCase();
           const field = (body.filterField as string) || (req.query.filterField as string) || 'all';
           if (field === 'name') {
