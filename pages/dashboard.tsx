@@ -6,6 +6,7 @@ import { FaTrash, FaClipboard, FaEye, FaClone, FaPen } from 'react-icons/fa';
 import { FiLogOut } from 'react-icons/fi';
 import type { GetServerSideProps } from 'next';
 import { parse } from 'cookie';
+import AdvancedFilters from 'components/AdvancedFilters';
 
 type DashboardProps = {};
 
@@ -47,6 +48,16 @@ const Dashboard: React.FC<DashboardProps> = () => {
         left: 0,
         top: 0,
     });
+    const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+    const [advancedFilters, setAdvancedFilters] = useState<{
+        field: 'any' | 'name' | 'content' | 'id';
+        op: 'contains' | 'exact' | 'starts' | 'regex';
+        value: string;
+        permanent?: 'yes' | 'no' | 'any';
+    }[]>([{ field: 'any', op: 'contains', value: '', permanent: 'any' }]);
+    const [sortOrder, setSortOrder] = useState<'name' | 'date' | 'permanent' | null>(null);
+    const [sortReverse, setSortReverse] = useState(false);
+    const [shortDropdownOpen, setShortDropdownOpen] = useState(false);
 
     const showTooltip = (e: any, text: string, center = false) => {
         if (center) {
@@ -98,17 +109,16 @@ const Dashboard: React.FC<DashboardProps> = () => {
     // Polling removed — dashboard relies on BroadcastChannel for real-time updates.
 
     useEffect(() => {
-        // Filtrar los pastes según el término de búsqueda
-        setFilteredPastes(
-            pastes.filter(
-                (paste) =>
-                    paste &&
-                    paste.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                    paste.content?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                    paste.id?.toLowerCase().includes(searchTerm.toLowerCase()) // Filtrar por UUID
-            )
+        // Filtrar los pastes según el término de búsqueda y luego aplicar ordenamiento
+        const filtered = pastes.filter(
+            (paste) =>
+                paste &&
+                paste.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                paste.content?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                paste.id?.toLowerCase().includes(searchTerm.toLowerCase()) // Filtrar por UUID
         );
-    }, [searchTerm, pastes]);
+        setFilteredPastes(applySorting(filtered));
+    }, [searchTerm, pastes, sortOrder, sortReverse]);
 
     // infinite scroll observer
     const loadMore = async () => {
@@ -361,6 +371,32 @@ const Dashboard: React.FC<DashboardProps> = () => {
         }
     };
 
+    const applySorting = (pastes: Paste[]) => {
+        if (!sortOrder) return pastes;
+        
+        const sorted = [...pastes].sort((a, b) => {
+            let comparison = 0;
+            
+            switch (sortOrder) {
+                case 'name':
+                    comparison = (a.name || '').localeCompare(b.name || '');
+                    break;
+                case 'date':
+                    comparison = new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+                    break;
+                case 'permanent':
+                    comparison = (a.permanent ? 1 : 0) - (b.permanent ? 1 : 0);
+                    break;
+                default:
+                    return 0;
+            }
+            
+            return sortReverse ? -comparison : comparison;
+        });
+        
+        return sorted;
+    };
+
     const openDeleteModal = (payload: any) => {
         // ensure each rule has a stable uid so Remove can always identify it
         const rules = (payload?.filterRules || []).map((r: any) => ({
@@ -590,7 +626,165 @@ const Dashboard: React.FC<DashboardProps> = () => {
             {/* Main content */}
             <div className="dashboard-content">
                 <div className="card">
-                    <h1 className="card-title">Pastes</h1>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                        <h1 className="card-title" style={{ margin: 0 }}>Pastes</h1>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <button
+                                onClick={() => setShowAdvancedFilter(!showAdvancedFilter)}
+                                style={{
+                                    background: '#444',
+                                    color: '#fff',
+                                    border: 'none',
+                                    borderRadius: 4,
+                                    padding: '6px 12px',
+                                    cursor: 'pointer',
+                                    fontSize: '13px'
+                                }}
+                            >
+                                {showAdvancedFilter ? 'Hide Filters' : 'Show Filters'}
+                            </button>
+                            <div style={{ position: 'relative' }}>
+                                <button
+                                    onClick={() => setShortDropdownOpen(!shortDropdownOpen)}
+                                    style={{
+                                        background: '#444',
+                                        color: '#fff',
+                                        border: 'none',
+                                        borderRadius: 4,
+                                        padding: '6px 12px',
+                                        cursor: 'pointer',
+                                        fontSize: '13px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '4px'
+                                    }}
+                                >
+                                    Sort
+                                    <span style={{ fontSize: '10px' }}>▼</span>
+                                </button>
+                                {shortDropdownOpen && (
+                                    <div
+                                        style={{
+                                            position: 'absolute',
+                                            top: '100%',
+                                            right: 0,
+                                            background: '#2a2a2a',
+                                            border: '1px solid #555',
+                                            borderRadius: 6,
+                                            marginTop: 4,
+                                            minWidth: 140,
+                                            zIndex: 1000,
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+                                        }}
+                                    >
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSortOrder('name');
+                                                setSortReverse(false);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            Sort by Name
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSortOrder('date');
+                                                setSortReverse(false);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            Sort by Date
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSortOrder('permanent');
+                                                setSortReverse(false);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            Sort by Permanent
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSortReverse(!sortReverse);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            {sortReverse ? 'Normal Order' : 'Reverse Order'}
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSearchTerm('');
+                                                setSortOrder(null);
+                                                setSortReverse(false);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            Clear Filters
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    {showAdvancedFilter && (
+                        <AdvancedFilters
+                            advancedFilters={advancedFilters}
+                            setAdvancedFilters={setAdvancedFilters}
+                            setSearchTerm={setSearchTerm}
+                            setShowAdvancedFilter={setShowAdvancedFilter}
+                        />
+                    )}
                     <div className="delete-options" style={{ marginTop: 12, marginBottom: 8 }}>
                         <div className="delete-options-label" style={{ fontWeight: 800, color: '#ddd', marginBottom: 8 }}>
                             Delete options:
