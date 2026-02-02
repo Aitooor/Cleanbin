@@ -6,3 +6,11 @@ services:
       - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=production
+      - PORT=3001
+      - ADMIN_EMAIL=example@example.com
+      - ADMIN_PASSWORD=securePassword
+      - DATABASE__SAVE_TYPE=SQLite
+      - CACHE_TYPE=SQLite
+      - DATABASE__SQLITE_DB_PATH=/app/data/pastes.db
+    volumes:
+      - ./data:/app/data
