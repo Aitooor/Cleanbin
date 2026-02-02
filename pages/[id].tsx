@@ -300,13 +300,38 @@ const PastePreview = () => {
     let afterImports = '';
 
     if (code) {
-        // Encuentra el bloque de imports consecutivos (import y import static)
-        const importRegex = /^([\s\S]*?)(^((?:import(?:\s+static)?\s+.+;\s*)+))/m;
-        const match = code.match(importRegex);
-        if (match) {
-            beforeImports = match[1];
-            importBlock = match[2];
-            afterImports = code.slice(beforeImports.length + importBlock.length);
+        // Detecta el bloque de imports de forma robusta recorriendo las líneas
+        const lines = code.split(/\r?\n/);
+        let start = -1;
+        let end = -1;
+
+        const isImportLine = (line: string) => /^(\s*)import(\s+type|\s+static|\s+)/.test(line);
+        const isBlankOrComment = (line: string) => /^(\s*$|\s*\/\/.*$)/.test(line);
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+
+            if (start === -1) {
+                // Aún no hemos encontrado el primer import
+                if (isImportLine(line)) {
+                    start = i;
+                    end = i;
+                }
+            } else {
+                // Ya dentro del bloque de imports: permitimos más imports,
+                // líneas en blanco y comentarios entre ellos
+                if (isImportLine(line) || isBlankOrComment(line)) {
+                    end = i;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if (start !== -1) {
+            beforeImports = lines.slice(0, start).join('\n');
+            importBlock = lines.slice(start, end + 1).join('\n');
+            afterImports = lines.slice(end + 1).join('\n');
         } else {
             beforeImports = code;
         }

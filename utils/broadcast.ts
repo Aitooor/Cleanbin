@@ -16,7 +16,8 @@ export type PasteMessage =
   | { type: 'paste_created'; paste: { id: string; name?: string; permanent?: boolean; createdAt?: string } }
   | { type: 'paste_deleted'; id: string }
   | { type: 'paste_renamed'; id: string; name: string }
-  | { type: 'pastes_bulk_deleted'; ids: string[] };
+  | { type: 'pastes_bulk_deleted'; ids: string[] }
+  | { type: 'paste_touched'; id: string; expiresAt?: string };
 
 export function postMessage(msg: PasteMessage) {
   const bc = getBroadcastChannel();
