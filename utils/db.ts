@@ -263,12 +263,18 @@ class JsonDatabase implements DatabaseBackend {
   async savePaste(id: string, content: string, name: string, permanent: boolean) {
     this.ensureServer();
     const filePath = this.getFilePath(id);
+    const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
     const data: Paste = {
       id,
       content,
       name,
       permanent: permanent ? 'true' : 'false',
       createdAt: new Date().toISOString(),
+      ...(permanent ? {} : {
+        expiresAt: new Date(
+          Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
+        ).toISOString()
+      }),
     };
     await fs!.mkdir(this.jsonPath, { recursive: true });
     // compress and store binary
@@ -406,7 +412,19 @@ function createDatabase(): DatabaseBackend {
       db.exec(`CREATE TABLE IF NOT EXISTS pastes (id TEXT PRIMARY KEY, payload TEXT)`);
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
-          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
+          const obj = { 
+            id, 
+            content, 
+            name, 
+            permanent, 
+            createdAt: new Date().toISOString(),
+            ...(permanent ? {} : {
+              expiresAt: new Date(
+                Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
+              ).toISOString()
+            })
+          };
           const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
           const b64 = compressed.toString('base64');
           const stmt = db.prepare('INSERT OR REPLACE INTO pastes (id,payload) VALUES (?,?)');
@@ -484,7 +502,19 @@ function createDatabase(): DatabaseBackend {
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
           const coll = await collPromise;
-          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
+          const obj = { 
+            id, 
+            content, 
+            name, 
+            permanent, 
+            createdAt: new Date().toISOString(),
+            ...(permanent ? {} : {
+              expiresAt: new Date(
+                Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
+              ).toISOString()
+            })
+          };
           const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
           const b64 = compressed.toString('base64');
           await coll.updateOne({ id }, { $set: { payload: b64 } }, { upsert: true });
@@ -576,7 +606,19 @@ function createDatabase(): DatabaseBackend {
       });
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
-          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
+          const obj = { 
+            id, 
+            content, 
+            name, 
+            permanent, 
+            createdAt: new Date().toISOString(),
+            ...(permanent ? {} : {
+              expiresAt: new Date(
+                Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
+              ).toISOString()
+            })
+          };
           const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
           const b64 = compressed.toString('base64');
           await knex('pastes').insert({ id, payload: b64 }).onConflict('id').merge();
@@ -646,7 +688,19 @@ function createDatabase(): DatabaseBackend {
       const client = new cassandra.Client({ contactPoints: ['127.0.0.1'], localDataCenter: 'datacenter1', keyspace: process.env.CASSANDRA_KEYSPACE || 'pastes' });
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
-          const obj = { id, content, name, permanent, createdAt: new Date().toISOString() };
+          const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
+          const obj = { 
+            id, 
+            content, 
+            name, 
+            permanent, 
+            createdAt: new Date().toISOString(),
+            ...(permanent ? {} : {
+              expiresAt: new Date(
+                Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
+              ).toISOString()
+            })
+          };
           const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
           await client.execute('INSERT INTO pastes (id,payload) VALUES (?,?)', [id, compressed.toString('base64')], { prepare: true });
           await cache.set(`paste_${id}`, obj);
