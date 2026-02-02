@@ -189,6 +189,20 @@ const PastePreview = () => {
                     setPermanent(data.permanent === true || data.permanent === 'true');
                     if (data && typeof data.expiresAt === 'string') {
                         setExpiresAt(data.expiresAt);
+                        // Broadcast refreshed expiration so other tabs update their countdown
+                        import('../utils/broadcast')
+                            .then((mod) => {
+                                try {
+                                    mod.postMessage({
+                                        type: 'paste_touched',
+                                        id: id,
+                                        expiresAt: data.expiresAt,
+                                    });
+                                } catch {
+                                    // ignore broadcast errors
+                                }
+                            })
+                            .catch(() => {});
                     } else {
                         setExpiresAt(null);
                     }
@@ -205,6 +219,33 @@ const PastePreview = () => {
             hljs.highlightElement(codeRef.current);
         }
     }, [content]);
+
+    // Listen for paste_touched messages so all open previews stay in sync
+    useEffect(() => {
+        let cleanup: (() => void) | undefined;
+        if (typeof window === 'undefined') return () => {};
+
+        import('../utils/broadcast')
+            .then((mod) => {
+                try {
+                    cleanup = mod.listen((msg) => {
+                        if (!msg) return;
+                        if (msg.type === 'paste_touched' && typeof id === 'string' && msg.id === id) {
+                            if (msg.expiresAt) {
+                                setExpiresAt(msg.expiresAt);
+                            }
+                        }
+                    });
+                } catch {
+                    // ignore listener errors
+                }
+            })
+            .catch(() => {});
+
+        return () => {
+            if (cleanup) cleanup();
+        };
+    }, [id]);
 
     // Actualiza la etiqueta de cuenta atrás para pastes temporales (en tiempo real)
     useEffect(() => {
