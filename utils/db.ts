@@ -289,31 +289,38 @@ class JsonDatabase implements DatabaseBackend {
     this.ensureServer();
     const cacheKey = `paste_${id}`;
     const cached = await cache.get(cacheKey);
-    if (cached) return cached as Paste;
     const filePath = this.getFilePath(id);
+
+    // Helper to extend expiration for temporary pastes and persist
+    const extendIfTemporary = async (data: Paste): Promise<Paste> => {
+      const isTemp = data.permanent === false || data.permanent === 'false';
+      if (isTemp) {
+        const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
+        const newExpiresAt = new Date(
+          Date.now() + expirationDays * 24 * 60 * 60 * 1000
+        ).toISOString();
+
+        const next: Paste = { ...data, expiresAt: newExpiresAt };
+        const payloadBuf = Buffer.from(JSON.stringify(next));
+        const compressed = await compressBuffer(payloadBuf);
+        await fs!.writeFile(filePath, compressed);
+        await cache.set(cacheKey, next);
+        return next;
+      }
+      // Ensure cache is populated even if we don't extend
+      await cache.set(cacheKey, data);
+      return data;
+    };
+
+    if (cached) {
+      return extendIfTemporary(cached as Paste);
+    }
+
     try {
       const fileBuffer = await fs!.readFile(filePath);
       const decompressed = await decompressBuffer(fileBuffer);
-      let data = JSON.parse(decompressed.toString('utf-8')) as Paste;
-      
-      // Extend expiration for temporary pastes when accessed
-      if (data.permanent === 'false' && data.expiresAt) {
-        const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
-        const newExpiresAt = new Date(
-          Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
-        ).toISOString();
-        
-        // Update the data with new expiration
-        data = { ...data, expiresAt: newExpiresAt };
-        
-        // Save the updated data back to file
-        const payloadBuf = Buffer.from(JSON.stringify(data));
-        const compressed = await compressBuffer(payloadBuf);
-        await fs!.writeFile(filePath, compressed);
-      }
-      
-      await cache.set(cacheKey, data);
-      return data;
+      const data = JSON.parse(decompressed.toString('utf-8')) as Paste;
+      return extendIfTemporary(data);
     } catch (err: any) {
       if (err.code === 'ENOENT') return null;
       throw err;
@@ -457,7 +464,8 @@ function createDatabase(): DatabaseBackend {
           let parsed = JSON.parse(decompressed.toString('utf-8'));
           
           // Extend expiration for temporary pastes when accessed
-          if (parsed.permanent === 'false' && parsed.expiresAt) {
+          const isTemp = parsed.permanent === false || parsed.permanent === 'false';
+          if (isTemp) {
             const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
             const newExpiresAt = new Date(
               Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
@@ -565,7 +573,8 @@ function createDatabase(): DatabaseBackend {
           let parsed = JSON.parse(decompressed.toString('utf-8'));
           
           // Extend expiration for temporary pastes when accessed
-          if (parsed.permanent === 'false' && parsed.expiresAt) {
+          const isTemp = parsed.permanent === false || parsed.permanent === 'false';
+          if (isTemp) {
             const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
             const newExpiresAt = new Date(
               Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
@@ -685,7 +694,8 @@ function createDatabase(): DatabaseBackend {
           let parsed = JSON.parse(decompressed.toString('utf-8'));
           
           // Extend expiration for temporary pastes when accessed
-          if (parsed.permanent === 'false' && parsed.expiresAt) {
+          const isTemp = parsed.permanent === false || parsed.permanent === 'false';
+          if (isTemp) {
             const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
             const newExpiresAt = new Date(
               Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
@@ -783,7 +793,8 @@ function createDatabase(): DatabaseBackend {
           let parsed = JSON.parse(decompressed.toString('utf-8'));
           
           // Extend expiration for temporary pastes when accessed
-          if (parsed.permanent === 'false' && parsed.expiresAt) {
+          const isTemp = parsed.permanent === false || parsed.permanent === 'false';
+          if (isTemp) {
             const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
             const newExpiresAt = new Date(
               Date.now() + (expirationDays * 24 * 60 * 60 * 1000)

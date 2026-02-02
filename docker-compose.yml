@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  web:
+    # Usa aquí la imagen que hayas subido a tu registry (por ejemplo Docker Hub)
+    # Sustituye "tuusuario" por tu nombre de usuario real de Docker Hub
+    image: aitooor/cleanbin:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
