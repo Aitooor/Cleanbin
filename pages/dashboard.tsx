@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 // Using simple list rendering for stability (virtualization removed temporarily)
 import { useRouter } from 'next/router';
 import { useNotification } from 'components/NotificationProvider';
-import { FaTrash, FaClipboard, FaEye } from 'react-icons/fa';
+import { FaTrash, FaClipboard, FaEye, FaClone, FaPen } from 'react-icons/fa';
 import { FiLogOut } from 'react-icons/fi';
 import type { GetServerSideProps } from 'next';
 import { parse } from 'cookie';
+import AdvancedFilters from 'components/AdvancedFilters';
 
 type DashboardProps = {};
 
@@ -47,6 +48,16 @@ const Dashboard: React.FC<DashboardProps> = () => {
         left: 0,
         top: 0,
     });
+    const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+    const [advancedFilters, setAdvancedFilters] = useState<{
+        field: 'any' | 'name' | 'content' | 'id';
+        op: 'contains' | 'exact' | 'starts' | 'regex';
+        value: string;
+        permanent?: 'yes' | 'no' | 'any';
+    }[]>([{ field: 'any', op: 'contains', value: '', permanent: 'any' }]);
+    const [sortOrder, setSortOrder] = useState<'name' | 'date' | 'permanent' | null>(null);
+    const [sortReverse, setSortReverse] = useState(false);
+    const [shortDropdownOpen, setShortDropdownOpen] = useState(false);
 
     const showTooltip = (e: any, text: string, center = false) => {
         if (center) {
@@ -98,17 +109,16 @@ const Dashboard: React.FC<DashboardProps> = () => {
     // Polling removed — dashboard relies on BroadcastChannel for real-time updates.
 
     useEffect(() => {
-        // Filtrar los pastes según el término de búsqueda
-        setFilteredPastes(
-            pastes.filter(
-                (paste) =>
-                    paste &&
-                    paste.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                    paste.content?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                    paste.id?.toLowerCase().includes(searchTerm.toLowerCase()) // Filtrar por UUID
-            )
+        // Filtrar los pastes según el término de búsqueda y luego aplicar ordenamiento
+        const filtered = pastes.filter(
+            (paste) =>
+                paste &&
+                paste.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                paste.content?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                paste.id?.toLowerCase().includes(searchTerm.toLowerCase()) // Filtrar por UUID
         );
-    }, [searchTerm, pastes]);
+        setFilteredPastes(applySorting(filtered));
+    }, [searchTerm, pastes, sortOrder, sortReverse]);
 
     // infinite scroll observer
     const loadMore = async () => {
@@ -361,6 +371,32 @@ const Dashboard: React.FC<DashboardProps> = () => {
         }
     };
 
+    const applySorting = (pastes: Paste[]) => {
+        if (!sortOrder) return pastes;
+        
+        const sorted = [...pastes].sort((a, b) => {
+            let comparison = 0;
+            
+            switch (sortOrder) {
+                case 'name':
+                    comparison = (a.name || '').localeCompare(b.name || '');
+                    break;
+                case 'date':
+                    comparison = new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+                    break;
+                case 'permanent':
+                    comparison = (a.permanent ? 1 : 0) - (b.permanent ? 1 : 0);
+                    break;
+                default:
+                    return 0;
+            }
+            
+            return sortReverse ? -comparison : comparison;
+        });
+        
+        return sorted;
+    };
+
     const openDeleteModal = (payload: any) => {
         // ensure each rule has a stable uid so Remove can always identify it
         const rules = (payload?.filterRules || []).map((r: any) => ({
@@ -536,56 +572,28 @@ const Dashboard: React.FC<DashboardProps> = () => {
     return (
         <div className="dashboard-container">
             <div className="dashboard-header">
-                <button
-                    onClick={handleLogout}
-                    className="logout-button"
-                    style={{
-                        position: 'absolute',
-                        top: '10px',
-                        right: '10px',
-                        backgroundColor: '#ff4d4f',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: '5px',
-                        padding: '8px 15px',
-                        cursor: 'pointer',
-                        transition: 'background-color 0.3s',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                    }}
-                    onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#d9363e')}
-                    onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#ff4d4f')}
-                >
-                    <FiLogOut style={{ marginRight: '5px' }} />
+                <button className="home-button" onClick={() => router.push('/')}>Home</button>
+                <div className="header-center">
+                    <input
+                        type="text"
+                        placeholder="Search..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="dashboard-search"
+                    />
+                </div>
+                <button onClick={handleLogout} className="logout-button">
+                    <FiLogOut className="logout-icon" />
                     Logout
                 </button>
             </div>
-            {/* Buttons moved inside the card under the "Pastes" title */}
-            {/* Campo de búsqueda */}
-            <div style={{ marginBottom: '20px' }}>
-                <input
-                    type="text"
-                    placeholder="Search..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    style={{
-                        width: '300px', // Ancho reducido
-                        padding: '8px',
-                        borderRadius: '5px',
-                        border: '1px solid #ccc',
-                    }}
-                />
-            </div>
             {/* Contadores de pastes */}
-            <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
+            <div className="counters">
                 <div
                     style={{
                         padding: '12px 18px',
                         borderRadius: '8px',
-                        backgroundColor: '#202224',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                        minWidth: '140px',
+                                                                        minWidth: '140px',
                         textAlign: 'center',
                     }}
                 >
@@ -596,9 +604,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     style={{
                         padding: '12px 18px',
                         borderRadius: '8px',
-                        backgroundColor: '#202224',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                        minWidth: '140px',
+                                                                        minWidth: '140px',
                         textAlign: 'center',
                     }}
                 >
@@ -609,9 +615,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     style={{
                         padding: '12px 18px',
                         borderRadius: '8px',
-                        backgroundColor: '#202224',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                        minWidth: '140px',
+                                                                        minWidth: '140px',
                         textAlign: 'center',
                     }}
                 >
@@ -622,60 +626,229 @@ const Dashboard: React.FC<DashboardProps> = () => {
             {/* Main content */}
             <div className="dashboard-content">
                 <div className="card">
-                    <h1 className="card-title">Pastes</h1>
-                    <div style={{ display: 'flex', gap: 10, marginTop: 12, marginBottom: 8 }}>
-                        <button
-                            onClick={() => openDeleteModal({ mode: 'all' })}
-                            style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                        >
-                            Delete All
-                        </button>
-                        <button
-                            onClick={() => openDeleteModal({ mode: 'permanent' })}
-                            style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                        >
-                            Delete Permanent
-                        </button>
-                        <button
-                            onClick={() => openDeleteModal({ mode: 'temporary' })}
-                            style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                        >
-                            Delete Temporary
-                        </button>
-                        <button
-                            onClick={() => {
-                                if (!showDeleteModal && deletePayload?.mode === 'filtered') {
-                                    setShowDeleteModal(true);
-                                    setConfirmStage(1);
-                                    setShowStayOrCloseAfterPicks(false);
-                                    setPreviewItems([]);
-                                    setPreviewSelectedIds(new Set());
-                                    setPreviewPage(1);
-                                    setPreviewPageSize(10);
-                                } else {
-                                    openDeleteModal({ mode: 'filtered', filter: searchTerm });
-                                }
-                            }}
-                            style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}
-                        >
-                            Delete Filtered
-                        </button>
-                        <button
-                            onClick={() => openDeleteModal({ mode: 'selected' })}
-                            disabled={selectedIds.size === 0}
-                            style={{
-                                backgroundColor: selectedIds.size === 0 ? '#333' : '#722ed1',
-                                color: '#fff',
-                                border: 'none',
-                                borderRadius: 6,
-                                padding: '8px 12px',
-                                cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
-                            }}
-                        >
-                            Delete Selected ({selectedIds.size})
-                        </button>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                        <h1 className="card-title" style={{ margin: 0 }}>Pastes</h1>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <button
+                                onClick={() => setShowAdvancedFilter(!showAdvancedFilter)}
+                                style={{
+                                    background: '#444',
+                                    color: '#fff',
+                                    border: 'none',
+                                    borderRadius: 4,
+                                    padding: '6px 12px',
+                                    cursor: 'pointer',
+                                    fontSize: '13px'
+                                }}
+                            >
+                                {showAdvancedFilter ? 'Hide Filters' : 'Show Filters'}
+                            </button>
+                            <div style={{ position: 'relative' }}>
+                                <button
+                                    onClick={() => setShortDropdownOpen(!shortDropdownOpen)}
+                                    style={{
+                                        background: '#444',
+                                        color: '#fff',
+                                        border: 'none',
+                                        borderRadius: 4,
+                                        padding: '6px 12px',
+                                        cursor: 'pointer',
+                                        fontSize: '13px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '4px'
+                                    }}
+                                >
+                                    Sort
+                                    <span style={{ fontSize: '10px' }}>▼</span>
+                                </button>
+                                {shortDropdownOpen && (
+                                    <div
+                                        style={{
+                                            position: 'absolute',
+                                            top: '100%',
+                                            right: 0,
+                                            background: '#2a2a2a',
+                                            border: '1px solid #555',
+                                            borderRadius: 6,
+                                            marginTop: 4,
+                                            minWidth: 140,
+                                            zIndex: 1000,
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+                                        }}
+                                    >
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSortOrder('name');
+                                                setSortReverse(false);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            Sort by Name
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSortOrder('date');
+                                                setSortReverse(false);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            Sort by Date
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSortOrder('permanent');
+                                                setSortReverse(false);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            Sort by Permanent
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSortReverse(!sortReverse);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            {sortReverse ? 'Normal Order' : 'Reverse Order'}
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShortDropdownOpen(false);
+                                                setSearchTerm('');
+                                                setSortOrder(null);
+                                                setSortReverse(false);
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '8px 12px',
+                                                background: 'transparent',
+                                                color: '#e0e0e0',
+                                                border: 'none',
+                                                textAlign: 'left',
+                                                cursor: 'pointer',
+                                                fontSize: '13px'
+                                            }}
+                                        >
+                                            Clear Filters
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222', fontWeight: 700, alignItems: 'center' }}>
+                    {showAdvancedFilter && (
+                        <AdvancedFilters
+                            advancedFilters={advancedFilters}
+                            setAdvancedFilters={setAdvancedFilters}
+                            setSearchTerm={setSearchTerm}
+                            setShowAdvancedFilter={setShowAdvancedFilter}
+                        />
+                    )}
+                    <div className="delete-options" style={{ marginTop: 12, marginBottom: 8 }}>
+                        <div className="delete-options-label" style={{ fontWeight: 800, color: '#ddd', marginBottom: 8 }}>
+                            Delete options:
+                        </div>
+                            <div className="actions-row" role="toolbar" aria-label="Delete options" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                                onClick={() => openDeleteModal({ mode: 'all' })}
+                                style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: '14px', minWidth: '80px', flex: '0 0 auto' }}
+                            >
+                                All
+                            </button>
+                            <button
+                                onClick={() => openDeleteModal({ mode: 'permanent' })}
+                                style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: '14px', minWidth: '80px', flex: '0 0 auto' }}
+                            >
+                                Permanent
+                            </button>
+                            <button
+                                onClick={() => openDeleteModal({ mode: 'temporary' })}
+                                style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: '14px', minWidth: '80px', flex: '0 0 auto' }}
+                            >
+                                Temporary
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (!showDeleteModal && deletePayload?.mode === 'filtered') {
+                                        setShowDeleteModal(true);
+                                        setConfirmStage(1);
+                                        setShowStayOrCloseAfterPicks(false);
+                                        setPreviewItems([]);
+                                        setPreviewSelectedIds(new Set());
+                                        setPreviewPage(1);
+                                        setPreviewPageSize(10);
+                                    } else {
+                                        openDeleteModal({ mode: 'filtered', filter: searchTerm });
+                                    }
+                                }}
+                                style={{ backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: '14px', minWidth: '80px', flex: '0 0 auto' }}
+                            >
+                                Filtered
+                            </button>
+                            <button
+                                onClick={() => openDeleteModal({ mode: 'selected' })}
+                                disabled={selectedIds.size === 0}
+                                style={{
+                                    backgroundColor: selectedIds.size === 0 ? '#333' : '#722ed1',
+                                    color: '#fff',
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    padding: '8px 12px',
+                                    cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
+                                    fontSize: '14px',
+                                    minWidth: '80px',
+                                    flex: '0 0 auto'
+                                }}
+                            >
+                                Selected ({selectedIds.size})
+                            </button>
+                        </div>
+                        <div className="delete-warning" style={{ marginTop: 8, color: '#bbb', fontSize: 13 }}>
+                            Take care when deleting pastes
+                        </div>
+                    </div>
+                    <div className="paste-grid paste-grid--header" style={{ borderBottom: '1px solid #222', fontWeight: 700 }}>
                         <div>
                             <input
                                 type="checkbox"
@@ -694,7 +867,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                             <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>No pastes to show</div>
                         ) : (
                             filteredPastes.map((paste) => (
-                                <div key={paste.id} style={{ display: 'grid', gridTemplateColumns: '0.6fr 2fr 3fr 1fr 3fr', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #111' }}>
+                                <div key={paste.id} className="paste-grid" style={{ alignItems: 'center', borderBottom: '1px solid #111' }}>
                                     <div>
                                         <input type="checkbox" checked={selectedIds.has(paste.id)} onChange={() => toggleSelect(paste.id)} />
                                     </div>
@@ -703,22 +876,57 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         {paste.id}
                                     </div>
                                     <div>{paste.permanent ? 'Yes' : 'No'}</div>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <button className="button preview-button" onClick={() => window.open(`/${paste.id}`, '_blank')} style={{ backgroundColor: '#52c41a', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            <FaEye /> Preview
-                                        </button>
-                                        <button className="button copy-url-button" onClick={() => handleCopyToClipboard(`${window.location.origin}/${paste.id}`, 'URL copied to clipboard')} style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            <FaClipboard /> Copy URL
-                                        </button>
-                                        <button className="button clone-button" onClick={() => handleClonePaste(paste.id)} style={{ backgroundColor: '#1890ff', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            <FaClipboard /> Clone
-                                        </button>
-                                        <button className="button rename-button" onClick={() => openRenameModal(paste)} style={{ backgroundColor: '#fa8c16', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            Rename
-                                        </button>
-                                        <button className="button delete-button" onClick={() => handleDeletePaste(paste.id)} style={{ backgroundColor: '#ff4d4f', color: '#fff', border: 'none', borderRadius: '5px', padding: '8px 15px', cursor: 'pointer' }}>
-                                            <FaTrash /> Delete
-                                        </button>
+                                    <div className="action-panel">
+                                        <div className="mobile-checkbox">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedIds.has(paste.id)}
+                                                onChange={() => toggleSelect(paste.id)}
+                                                aria-label="Select paste"
+                                            />
+                                        </div>
+                                        <div className="actions-icons">
+                                            <button
+                                                className="action-icon preview"
+                                                title="Preview"
+                                                aria-label="Preview"
+                                                onClick={() => window.open(`/${paste.id}`, '_blank')}
+                                            >
+                                                <FaEye />
+                                            </button>
+                                            <button
+                                                className="action-icon copy"
+                                                title="Copy URL"
+                                                aria-label="Copy URL"
+                                                onClick={() => handleCopyToClipboard(`${window.location.origin}/${paste.id}`, 'URL copied to clipboard')}
+                                            >
+                                                <FaClipboard />
+                                            </button>
+                                            <button
+                                                className="action-icon clone"
+                                                title="Clone"
+                                                aria-label="Clone"
+                                                onClick={() => handleClonePaste(paste.id)}
+                                            >
+                                                <FaClone />
+                                            </button>
+                                            <button
+                                                className="action-icon rename"
+                                                title="Rename"
+                                                aria-label="Rename"
+                                                onClick={() => openRenameModal(paste)}
+                                            >
+                                                <FaPen />
+                                            </button>
+                                            <button
+                                                className="action-icon delete"
+                                                title="Delete"
+                                                aria-label="Delete"
+                                                onClick={() => handleDeletePaste(paste.id)}
+                                            >
+                                                <FaTrash />
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             ))
@@ -729,7 +937,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                         {loading && <div>Loading...</div>}
                         {loadingMore && <div>Loading more...</div>}
                         {!loading && !loadingMore && pastes.length < total && (
-                            <button onClick={() => setPage((p) => p + 1)} style={{ padding: '8px 12px' }}>
+                            <button onClick={loadMore} style={{ padding: '8px 12px' }}>
                                 Load more
                             </button>
                         )}
@@ -1260,10 +1468,11 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         </select>
                                     </div>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr 1fr', gap: 8, padding: '6px 8px', fontWeight: 700, borderBottom: '1px solid #222' }}>
+                                <div className="preview-grid" style={{ fontWeight: 700, borderBottom: '1px solid #222' }}>
                                     <div>Name</div>
                                     <div>UUID</div>
                                     <div>Permanent</div>
+                                    <div></div>
                                 </div>
                                 {previewLoading ? (
                                     <div style={{ padding: 12, color: '#ccc' }}>Loading...</div>
@@ -1274,7 +1483,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                         const start = (previewPage - 1) * previewPageSize;
                                         const pageItems = previewItems.slice(start, start + previewPageSize);
                                         return pageItems.map((p) => (
-                                            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: confirmStage === 2 ? '2fr 3fr 1fr' : '2fr 3fr 1fr minmax(80px, auto)', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
+                                            <div key={p.id} className="preview-grid" style={{ alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid #111' }}>
                                                 <div>{p.name}</div>
                                                 <div style={{ color: 'blue', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { navigator.clipboard?.writeText(p.id); addNotification('UUID copied'); }}>
                                                     {p.id}
@@ -1323,17 +1532,17 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                         const count = idsToAdd.size;
                                                         setSelectedIds((prev) => {
                                                             const copy = new Set(prev);
-                                                            for (const id of idsToAdd) copy.add(id);
+                                                            Array.from(idsToAdd).forEach(id => copy.add(id));
                                                             return copy;
                                                         });
                                                         setPreviewSelectedIds((prev) => {
                                                             const next = new Set(prev);
-                                                            for (const id of idsToAdd) next.delete(id);
+                                                            Array.from(idsToAdd).forEach(id => next.delete(id));
                                                             return next;
                                                         });
                                                         setAddedFromPreviewIds((prev) => {
                                                             const next = new Set(prev);
-                                                            for (const id of idsToAdd) next.add(id);
+                                                            Array.from(idsToAdd).forEach(id => next.add(id));
                                                             return next;
                                                         });
                                                         setAddedPicksCount(count);
