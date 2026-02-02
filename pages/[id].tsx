@@ -206,7 +206,7 @@ const PastePreview = () => {
         }
     }, [content]);
 
-    // Actualiza la etiqueta de cuenta atrás para pastes temporales
+    // Actualiza la etiqueta de cuenta atrás para pastes temporales (en tiempo real)
     useEffect(() => {
         if (!expiresAt || permanent) {
             setTimeLeftLabel(null);
@@ -221,24 +221,26 @@ const PastePreview = () => {
             }
             const diff = target - Date.now();
             if (diff <= 0) {
-                setTimeLeftLabel('Se borrará en breve');
+                setTimeLeftLabel('Deleting soon');
                 return;
             }
             const totalSeconds = Math.floor(diff / 1000);
             const days = Math.floor(totalSeconds / 86400);
             const hours = Math.floor((totalSeconds % 86400) / 3600);
             const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
 
             const parts: string[] = [];
             if (days > 0) parts.push(`${days}d`);
             if (hours > 0 || days > 0) parts.push(`${hours}h`);
-            parts.push(`${minutes}m`);
+            if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
+            parts.push(`${seconds}s`);
 
-            setTimeLeftLabel(`Se borrará en ${parts.join(' ')}`);
+            setTimeLeftLabel(`Deleting in: ${parts.join(' ')}`);
         };
 
         updateLabel();
-        const intervalId = window.setInterval(updateLabel, 60000); // cada minuto es suficiente
+        const intervalId = window.setInterval(updateLabel, 1000); // actualiza cada segundo
         return () => window.clearInterval(intervalId);
     }, [expiresAt, permanent]);
 
@@ -406,7 +408,7 @@ const PastePreview = () => {
                 flexDirection: 'column',
             }}
         >
-            {(permanent || name) && (
+            {(name || (!permanent && timeLeftLabel)) && (
                 <div
                     style={{
                         position: 'fixed',
@@ -428,31 +430,39 @@ const PastePreview = () => {
                     }}
                 >
                     {!permanent && timeLeftLabel && (
-                        <div style={{ marginBottom: 4, fontSize: 11, color: '#ffb74d' }}>
+                        <div
+                            style={{
+                                marginBottom: 4,
+                                fontSize: 11,
+                                color: '#ffb74d',
+                                whiteSpace: 'nowrap',
+                            }}
+                        >
                             {timeLeftLabel}
                         </div>
                     )}
-                    <div
-                        title={name || 'Sin nombre'}
-                        dangerouslySetInnerHTML={{
-                            __html: name
-                                ? (() => {
-                                      const HR_PLACEHOLDER = '\u0001HR\u0001';
-                                      const hrHtml = '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
-                                      return name
-                                          .replace(/<br\s*\/?/gi, '\n')
-                                          .replace(/<hr\s*\/?/gi, HR_PLACEHOLDER)
-                                          .replace(/&/g, '&amp;')
-                                          .replace(/</g, '&lt;')
-                                          .replace(/>/g, '&gt;')
-                                          .replace(/"/g, '&quot;')
-                                          .replace(/\n/g, '<br />')
-                                          .split(HR_PLACEHOLDER)
-                                          .join(hrHtml);
-                                  })()
-                                : '—',
-                        }}
-                    />
+                    {name && (
+                        <div
+                            title={name || 'Untitled'}
+                            dangerouslySetInnerHTML={{
+                                __html: (() => {
+                                    const HR_PLACEHOLDER = '\u0001HR\u0001';
+                                    const hrHtml =
+                                        '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
+                                    return name
+                                        .replace(/<br\s*\/?/gi, '\n')
+                                        .replace(/<hr\s*\/?/gi, HR_PLACEHOLDER)
+                                        .replace(/&/g, '&amp;')
+                                        .replace(/</g, '&lt;')
+                                        .replace(/>/g, '&gt;')
+                                        .replace(/"/g, '&quot;')
+                                        .replace(/\n/g, '<br />')
+                                        .split(HR_PLACEHOLDER)
+                                        .join(hrHtml);
+                                })(),
+                            }}
+                        />
+                    )}
                 </div>
             )}
             <div
