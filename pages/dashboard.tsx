@@ -743,7 +743,7 @@ const Dashboard: React.FC<DashboardProps> = () => {
                         {loading && <div>Loading...</div>}
                         {loadingMore && <div>Loading more...</div>}
                         {!loading && !loadingMore && pastes.length < total && (
-                            <button onClick={() => setPage((p) => p + 1)} style={{ padding: '8px 12px' }}>
+                            <button onClick={loadMore} style={{ padding: '8px 12px' }}>
                                 Load more
                             </button>
                         )}
@@ -1338,17 +1338,17 @@ const Dashboard: React.FC<DashboardProps> = () => {
                                                         const count = idsToAdd.size;
                                                         setSelectedIds((prev) => {
                                                             const copy = new Set(prev);
-                                                            for (const id of idsToAdd) copy.add(id);
+                                                            Array.from(idsToAdd).forEach(id => copy.add(id));
                                                             return copy;
                                                         });
                                                         setPreviewSelectedIds((prev) => {
                                                             const next = new Set(prev);
-                                                            for (const id of idsToAdd) next.delete(id);
+                                                            Array.from(idsToAdd).forEach(id => next.delete(id));
                                                             return next;
                                                         });
                                                         setAddedFromPreviewIds((prev) => {
                                                             const next = new Set(prev);
-                                                            for (const id of idsToAdd) next.add(id);
+                                                            Array.from(idsToAdd).forEach(id => next.add(id));
                                                             return next;
                                                         });
                                                         setAddedPicksCount(count);
