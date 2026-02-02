@@ -160,6 +160,8 @@ const PastePreview = () => {
     const [content, setContent] = useState('');
     const [name, setName] = useState('');
     const [permanent, setPermanent] = useState(false);
+    const [expiresAt, setExpiresAt] = useState<string | null>(null);
+    const [timeLeftLabel, setTimeLeftLabel] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
     const { id } = router.query;
@@ -185,6 +187,11 @@ const PastePreview = () => {
                     }
                     setName(typeof data.name === 'string' ? data.name : '');
                     setPermanent(data.permanent === true || data.permanent === 'true');
+                    if (data && typeof data.expiresAt === 'string') {
+                        setExpiresAt(data.expiresAt);
+                    } else {
+                        setExpiresAt(null);
+                    }
                 })
                 .catch(() => {
                     setContent('Failed to load paste.');
@@ -198,6 +205,42 @@ const PastePreview = () => {
             hljs.highlightElement(codeRef.current);
         }
     }, [content]);
+
+    // Actualiza la etiqueta de cuenta atrás para pastes temporales
+    useEffect(() => {
+        if (!expiresAt || permanent) {
+            setTimeLeftLabel(null);
+            return;
+        }
+
+        const updateLabel = () => {
+            const target = new Date(expiresAt).getTime();
+            if (!target || Number.isNaN(target)) {
+                setTimeLeftLabel(null);
+                return;
+            }
+            const diff = target - Date.now();
+            if (diff <= 0) {
+                setTimeLeftLabel('Se borrará en breve');
+                return;
+            }
+            const totalSeconds = Math.floor(diff / 1000);
+            const days = Math.floor(totalSeconds / 86400);
+            const hours = Math.floor((totalSeconds % 86400) / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+            const parts: string[] = [];
+            if (days > 0) parts.push(`${days}d`);
+            if (hours > 0 || days > 0) parts.push(`${hours}h`);
+            parts.push(`${minutes}m`);
+
+            setTimeLeftLabel(`Se borrará en ${parts.join(' ')}`);
+        };
+
+        updateLabel();
+        const intervalId = window.setInterval(updateLabel, 60000); // cada minuto es suficiente
+        return () => window.clearInterval(intervalId);
+    }, [expiresAt, permanent]);
 
     // Detección de lenguaje completamente automática y agnóstica
     let detectedLang = 'plaintext';
@@ -383,26 +426,34 @@ const PastePreview = () => {
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
                     }}
-                    title={name || 'Sin nombre'}
-                    dangerouslySetInnerHTML={{
-                        __html: name
-                            ? (() => {
-                                  const HR_PLACEHOLDER = '\u0001HR\u0001';
-                                  const hrHtml = '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
-                                  return name
-                                      .replace(/<br\s*\/?>/gi, '\n')
-                                      .replace(/<hr\s*\/?>/gi, HR_PLACEHOLDER)
-                                      .replace(/&/g, '&amp;')
-                                      .replace(/</g, '&lt;')
-                                      .replace(/>/g, '&gt;')
-                                      .replace(/"/g, '&quot;')
-                                      .replace(/\n/g, '<br />')
-                                      .split(HR_PLACEHOLDER)
-                                      .join(hrHtml);
-                              })()
-                            : '—',
-                    }}
-                />
+                >
+                    {!permanent && timeLeftLabel && (
+                        <div style={{ marginBottom: 4, fontSize: 11, color: '#ffb74d' }}>
+                            {timeLeftLabel}
+                        </div>
+                    )}
+                    <div
+                        title={name || 'Sin nombre'}
+                        dangerouslySetInnerHTML={{
+                            __html: name
+                                ? (() => {
+                                      const HR_PLACEHOLDER = '\u0001HR\u0001';
+                                      const hrHtml = '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
+                                      return name
+                                          .replace(/<br\s*\/?/gi, '\n')
+                                          .replace(/<hr\s*\/?/gi, HR_PLACEHOLDER)
+                                          .replace(/&/g, '&amp;')
+                                          .replace(/</g, '&lt;')
+                                          .replace(/>/g, '&gt;')
+                                          .replace(/"/g, '&quot;')
+                                          .replace(/\n/g, '<br />')
+                                          .split(HR_PLACEHOLDER)
+                                          .join(hrHtml);
+                                  })()
+                                : '—',
+                        }}
+                    />
+                </div>
             )}
             <div
                 style={{

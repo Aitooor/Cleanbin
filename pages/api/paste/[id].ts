@@ -16,7 +16,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 return res.status(404).json({ error: 'Paste not found' });
             }
             const permanent = String(paste.permanent) === 'true';
-            return res.status(200).json({ content: paste.content, name: paste.name ?? '', permanent });
+            // For temporary pastes, expose expiresAt so the client can show a countdown.
+            const expiresAt = permanent ? null : paste.expiresAt ?? null;
+            return res.status(200).json({
+                content: paste.content,
+                name: paste.name ?? '',
+                permanent,
+                expiresAt,
+            });
         } catch (error) {
             console.error('Error fetching paste:', error);
             return res.status(500).json({ error: 'Internal Server Error' });
