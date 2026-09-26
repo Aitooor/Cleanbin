@@ -21,7 +21,6 @@ const Login = () => {
     });
 
     if (response.ok) {
-      document.cookie = `auth-token=true; path=/;`;
       router.push('/dashboard');
     } else {
       const data = await response.json();

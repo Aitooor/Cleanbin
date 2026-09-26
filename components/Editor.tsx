@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNotification } from './NotificationProvider';
 import { FiSave, FiFilePlus } from 'react-icons/fi'; // Importa iconos modernos
-import { parse } from 'cookie';
 
 const Editor = () => {
     const [content, setContent] = useState('');
@@ -12,8 +11,17 @@ const Editor = () => {
     const { addNotification } = useNotification();
 
     useEffect(() => {
-        const cookies = parse(document.cookie || '');
-        setIsLoggedIn(cookies['auth-token'] === 'true');
+        // The session cookie is httpOnly, so ask the server for the session state.
+        let active = true;
+        fetch('/api/auth', { method: 'GET' })
+            .then((response) => (response.ok ? response.json() : null))
+            .then((data) => {
+                if (active && data) setIsLoggedIn(!!data.authenticated);
+            })
+            .catch(() => {});
+        return () => {
+            active = false;
+        };
     }, []);
 
     const handleSave = async () => {
