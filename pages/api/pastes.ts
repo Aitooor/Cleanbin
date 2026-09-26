@@ -80,6 +80,9 @@ function matchesSimpleFilter(item: any, query: string, field?: string): boolean 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
+      // The listing is private: without a session the API must not expose other
+      // people's pastes (nor their content).
+      if (!requireSession(req, res)) return;
       const viewer = getSessionFromRequest(req);
       const scope = resolveScope((req.query.scope as string) || undefined, viewer);
       const force = req.query.force === '1';
@@ -93,7 +96,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (token) {
         const result = await getPastes(page, limit, token);
         const visible = selectVisible(result.items, viewer, scope).map((item) => withAccess(item, viewer));
-        res.setHeader('Cache-Control', `public, max-age=5`);
+        res.setHeader('Cache-Control', `private, no-store`);
         return res.status(200).json({ total: result.total, page, limit, items: visible, nextPageToken: result.nextPageToken || null });
       }
       // If preview/filtering requested, perform server-side filtering and pagination
