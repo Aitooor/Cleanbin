@@ -1,10 +1,60 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { parse } from 'cookie';
 import { savePaste, getPastes, deletePaste, getAllPastes } from '../../utils/db';
-import { getPage, invalidateCache, startPrecache } from '../../utils/pastesCache';
-import config from '../../utils/config';
-import { removePasteFromCache } from '../../utils/pastesCache';
+import { getPage, invalidateCache, removePasteFromCache } from '../../utils/pastesCache';
 import { postMessage } from '../../utils/broadcast';
+import { getSessionFromRequest, requireSession } from '../../utils/auth';
+import { isValidPasteId, MAX_PASTE_CONTENT_LENGTH } from '../../utils/validation';
+
+// Cap the request body size for this route (content is validated again per-request).
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '1mb',
+    },
+  },
+};
+
+function isPermanentPaste(paste: any): boolean {
+  return String(paste?.permanent) === 'true' || paste?.permanent === true;
+}
+
+function getFieldValue(item: any, field?: string): string {
+  if (field === 'name') return item?.name || '';
+  if (field === 'content') return item?.content || '';
+  if (field === 'id') return item?.id || '';
+  return `${item?.name || ''} ${item?.content || ''} ${item?.id || ''}`;
+}
+
+function matchesRule(rule: any, item: any): boolean {
+  const value = String(rule?.value ?? '').toLowerCase();
+  const fieldValue = String(getFieldValue(item, rule?.field));
+  const lowerFieldValue = fieldValue.toLowerCase();
+  let matched = false;
+  if (rule?.op === 'contains') matched = lowerFieldValue.includes(value);
+  else if (rule?.op === 'exact') matched = lowerFieldValue === value;
+  else if (rule?.op === 'starts') matched = lowerFieldValue.startsWith(value);
+  else if (rule?.op === 'regex') {
+    try {
+      matched = new RegExp(rule.value, 'i').test(fieldValue);
+    } catch (e) {
+      matched = false;
+    }
+  }
+  return rule?.negate ? !matched : matched;
+}
+
+function matchesRules(rules: any[], item: any, matchMode: string): boolean {
+  const results = rules.map((rule) => matchesRule(rule, item));
+  return matchMode.toUpperCase() === 'OR' ? results.some(Boolean) : results.every(Boolean);
+}
+
+function matchesSimpleFilter(item: any, query: string, field?: string): boolean {
+  const q = query.toLowerCase();
+  if (field === 'name') return (item?.name || '').toLowerCase().includes(q);
+  if (field === 'content') return (item?.content || '').toLowerCase().includes(q);
+  if (field === 'id') return (item?.id || '').toLowerCase().includes(q);
+  return [item?.name, item?.content, item?.id].some((value) => String(value || '').toLowerCase().includes(q));
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -41,44 +91,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const all = await getAllPastes();
         const scanned = all.slice(0, MAX_SCAN);
 
-        const applyRule = (r: any, item: any) => {
-          const val = ('' + (r.value || '')).toLowerCase();
-          const fieldVal =
-            r.field === 'name' ? (item.name || '') : r.field === 'content' ? (item.content || '') : r.field === 'id' ? (item.id || '') : (item.name || '') + ' ' + (item.content || '') + ' ' + (item.id || '');
-          const fv = ('' + fieldVal).toLowerCase();
-          let matched = false;
-          if (r.op === 'contains') matched = fv.includes(val);
-          else if (r.op === 'exact') matched = fv === val;
-          else if (r.op === 'starts') matched = fv.startsWith(val);
-          else if (r.op === 'regex') {
-            try {
-              const re = new RegExp(r.value, 'i');
-              matched = re.test(fieldVal);
-            } catch (e) {
-              matched = false;
-            }
-          }
-          return r.negate ? !matched : matched;
-        };
-
         let matchedItems = scanned;
         if (Array.isArray(filterRules) && filterRules.length > 0) {
-          matchedItems = scanned.filter((item) => {
-            const results = filterRules.map((r) => applyRule(r, item));
-            if ((matchMode || 'AND').toUpperCase() === 'OR') return results.some(Boolean);
-            return results.every(Boolean);
-          });
+          matchedItems = scanned.filter((item) => matchesRules(filterRules, item, matchMode));
         } else if (filter && filter.trim()) {
-          const q = filter.toLowerCase();
-          if (filterField === 'name') {
-            matchedItems = scanned.filter((p: any) => (p.name || '').toLowerCase().includes(q));
-          } else if (filterField === 'content') {
-            matchedItems = scanned.filter((p: any) => (p.content || '').toLowerCase().includes(q));
-          } else if (filterField === 'id') {
-            matchedItems = scanned.filter((p: any) => (p.id || '').toLowerCase().includes(q));
-          } else {
-            matchedItems = scanned.filter((p: any) => (p.name || '').toLowerCase().includes(q) || (p.content || '').toLowerCase().includes(q) || (p.id || '').toLowerCase().includes(q));
-          }
+          matchedItems = scanned.filter((item) => matchesSimpleFilter(item, filter, filterField));
         }
         const totalMatched = matchedItems.length;
         const start = (page - 1) * limit;
@@ -101,17 +118,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
   if (req.method === 'POST') {
-    const { id, content, name } = req.body;
-    const cookies = parse(req.headers.cookie || '');
-    const isLoggedIn = cookies['auth-token'] === 'true';
-
-    if (isLoggedIn && !name) {
-      return res.status(400).json({ message: 'Name is required for permanent pastes.' });
-    }
-
-    const permanent = isLoggedIn ? 'true' : 'false';
     try {
-      await savePaste(id, content, name, permanent === 'true');
+      const { id, content, name } = req.body || {};
+
+      if (typeof content === 'string' && content.length > MAX_PASTE_CONTENT_LENGTH) {
+        return res.status(413).json({ message: 'Paste content is too large' });
+      }
+
+      const isLoggedIn = !!getSessionFromRequest(req);
+      if (isLoggedIn && !name) {
+        return res.status(400).json({ message: 'Name is required for permanent pastes.' });
+      }
+
+      await savePaste(id, content, name, isLoggedIn);
       // Invalidate cache immediately so dashboard sees new paste
       invalidateCache();
       res.status(201).json({ message: 'Paste created' });
@@ -123,75 +142,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (req.method === 'DELETE') {
     try {
-      // Accept JSON body with { type: 'all'|'permanent'|'temporary', ids?: string[], filter?: string }
-      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
-      const type = (req.query.type as string) || body.type || 'all';
-      const ids: string[] | undefined = body.ids;
-      const filter: string | undefined = body.filter;
+      // Destructive operation: a valid session is always required.
+      const session = requireSession(req, res);
+      if (!session) return;
 
-      // Determine which ids to delete
+      // Accept JSON body with { ids?: string[], type?, filter?, filterRules?, confirm?: boolean }
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const ids: unknown = body.ids;
+      const filter: string | undefined = typeof body.filter === 'string' ? body.filter : undefined;
+      const filterRules: any[] | undefined = Array.isArray(body.filterRules) ? body.filterRules : undefined;
+      const matchMode = (body.matchMode || (req.query.matchMode as string) || 'AND').toString();
+      const confirmRequested = body.confirm === true || body.confirm === 'true';
+
+      const hasIds = Array.isArray(ids) && ids.length > 0;
+      const hasFilter =
+        (typeof filter === 'string' && filter.trim().length > 0) ||
+        (Array.isArray(filterRules) && filterRules.length > 0);
+
       let toDeleteIds: string[] = [];
-      if (Array.isArray(ids) && ids.length > 0) {
-        toDeleteIds = ids;
+
+      if (hasIds) {
+        // Delete exactly the provided ids.
+        if (!(ids as unknown[]).every(isValidPasteId)) {
+          return res.status(400).json({ error: 'One or more paste ids are invalid.' });
+        }
+        toDeleteIds = ids as string[];
       } else {
-        // fetch all pastes and filter server-side
+        // No explicit ids: require an explicit filter or an explicit confirmation.
+        if (!hasFilter && !confirmRequested) {
+          return res.status(400).json({
+            error: 'Bulk deletion requires explicit confirmation (confirm: true) or a filter.',
+          });
+        }
+
         const all = await getAllPastes().catch(() => null);
         if (!all) {
           return res.status(500).json({ message: 'Failed to load pastes for deletion' });
         }
+
+        const type = (req.query.type as string) || body.type || 'all';
+        let base = all;
         if (type === 'permanent') {
-          toDeleteIds = all.filter((p: any) => String(p.permanent) === 'true' || p.permanent === true).map((p: any) => p.id);
+          base = all.filter(isPermanentPaste);
         } else if (type === 'temporary' || type === 'temp') {
-          toDeleteIds = all.filter((p: any) => !(String(p.permanent) === 'true' || p.permanent === true)).map((p: any) => p.id);
-        } else {
-          // all or other
-          toDeleteIds = all.map((p: any) => p.id);
+          base = all.filter((paste: any) => !isPermanentPaste(paste));
         }
-        // advanced filter: either simple `filter`+`filterField` or structured `filterRules` with `matchMode`
-        const filterRules: any[] | undefined = Array.isArray(body.filterRules) ? body.filterRules : undefined;
-        const matchMode = (body.matchMode || (req.query.matchMode as string) || 'AND').toUpperCase();
+
         if (filterRules && filterRules.length > 0) {
-          const applyRule = (r: any, item: any) => {
-            const val = ('' + (r.value || '')).toLowerCase();
-            const fieldVal =
-              r.field === 'name' ? (item.name || '') : r.field === 'content' ? (item.content || '') : r.field === 'id' ? (item.id || '') : (item.name || '') + ' ' + (item.content || '') + ' ' + (item.id || '');
-            const fv = ('' + fieldVal).toLowerCase();
-            let matched = false;
-            if (r.op === 'contains') matched = fv.includes(val);
-            else if (r.op === 'exact') matched = fv === val;
-            else if (r.op === 'starts') matched = fv.startsWith(val);
-            else if (r.op === 'regex') {
-              try {
-                const re = new RegExp(r.value, 'i');
-                matched = re.test(fieldVal);
-              } catch (e) {
-                matched = false;
-              }
-            }
-            return r.negate ? !matched : matched;
-          };
-          const filtered = all.filter((item) => {
-            const results = filterRules.map((r) => applyRule(r, item));
-            if (matchMode === 'OR') return results.some(Boolean);
-            return results.every(Boolean);
-          }).map((p: any) => p.id);
-          // intersect with base toDeleteIds (respect type)
-          const baseSet = new Set(toDeleteIds);
-          toDeleteIds = filtered.filter((id) => baseSet.has(id));
+          toDeleteIds = base.filter((item: any) => matchesRules(filterRules, item, matchMode)).map((p: any) => p.id);
         } else if (filter && filter.trim()) {
-          const q = filter.toLowerCase();
-          const field = (body.filterField as string) || (req.query.filterField as string) || 'all';
-          if (field === 'name') {
-            toDeleteIds = all.filter((p: any) => (p.name || '').toLowerCase().includes(q)).map((p: any) => p.id);
-          } else if (field === 'content') {
-            toDeleteIds = all.filter((p: any) => (p.content || '').toLowerCase().includes(q)).map((p: any) => p.id);
-          } else if (field === 'id') {
-            toDeleteIds = all.filter((p: any) => (p.id || '').toLowerCase().includes(q)).map((p: any) => p.id);
-          } else {
-            toDeleteIds = all
-              .filter((p: any) => (p.name || '').toLowerCase().includes(q) || (p.content || '').toLowerCase().includes(q) || (p.id || '').toLowerCase().includes(q))
-              .map((p: any) => p.id);
-          }
+          const field = (body.filterField as string) || (req.query.filterField as string);
+          toDeleteIds = base.filter((item: any) => matchesSimpleFilter(item, filter, field)).map((p: any) => p.id);
+        } else {
+          toDeleteIds = base.map((p: any) => p.id);
         }
       }
 
@@ -226,6 +229,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  res.setHeader('Allow', ['GET', 'POST']);
+  res.setHeader('Allow', ['GET', 'POST', 'DELETE']);
   res.status(405).end(`Method ${req.method} Not Allowed`);
 }

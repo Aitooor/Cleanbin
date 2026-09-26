@@ -450,6 +450,8 @@ const Dashboard: React.FC<DashboardProps> = () => {
         } else if (deletePayload.mode === 'permanent' || deletePayload.mode === 'temporary' || deletePayload.mode === 'all') {
             body.type = deletePayload.mode === 'temporary' ? 'temporary' : deletePayload.mode;
         }
+        // The modal itself is the confirmation step for a bulk delete.
+        body.confirm = true;
         try {
             const res = await fetch('/api/pastes', {
                 method: 'DELETE',
@@ -1656,7 +1658,10 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
     const cookieHeader = req.headers.cookie || '';
     const cookies = cookieHeader ? parse(cookieHeader) : {};
 
-    if (!cookies['auth-token']) {
+    const { verifySessionToken } = await import('../utils/auth');
+    const session = verifySessionToken(cookies['auth-token']);
+
+    if (!session || session.role !== 'admin') {
         return {
             redirect: {
                 destination: '/login',
