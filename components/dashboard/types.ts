@@ -1,0 +1,56 @@
+import type { ReactNode } from 'react';
+
+// Shared shapes for the dashboard pages and components. Kept in one place so
+// the API contracts (fields, enums) are declared only once.
+
+export type SessionRole = 'admin' | 'user';
+
+export type DashboardSession = {
+    sessionEmail: string;
+    sessionRole: SessionRole;
+    permanentDeleteLimit: number | null;
+};
+
+export type Paste = {
+    id: string;
+    name: string;
+    content?: string;
+    createdAt: string;
+    permanent: boolean;
+};
+
+export type UserStatus = 'invited' | 'active';
+
+export type DashboardUser = {
+    email: string;
+    role: SessionRole;
+    permanentDeleteLimit: number;
+    createdAt: string;
+    status: UserStatus;
+    totpEnabled: boolean;
+    invitePending: boolean;
+    hasPasskey: boolean;
+    immutable?: boolean;
+};
+
+export type PagedResponse<T> = {
+    total: number;
+    page: number;
+    limit: number;
+    items: T[];
+};
+
+export type TableColumn<T> = {
+    key: string;
+    header: ReactNode;
+    render: (row: T) => ReactNode;
+    align?: 'left' | 'center' | 'right';
+    className?: string;
+    width?: string;
+};
+
+export type PageHeadProps = {
+    title: string;
+    description?: string;
+    actions?: ReactNode;
+};
