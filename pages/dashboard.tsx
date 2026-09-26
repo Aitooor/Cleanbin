@@ -3,14 +3,68 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useNotification } from '../components/NotificationProvider';
 import { FaTrash, FaClipboard, FaEye, FaClone, FaPen } from 'react-icons/fa';
-import { FiLogOut } from 'react-icons/fi';
+import { FiLogOut, FiKey, FiTrash2, FiUserPlus } from 'react-icons/fi';
+import { startRegistration } from '@simplewebauthn/browser';
 import type { GetServerSideProps } from 'next';
 import { parse } from 'cookie';
 import AdvancedFilters from '../components/AdvancedFilters';
 
-type DashboardProps = {};
+// Square icon button matching the editor toolbar (20px icon, 10px padding, #333 border).
+const passkeyButtonStyle: React.CSSProperties = {
+    backgroundColor: '#1e1e1e',
+    color: '#e0e0e0',
+    border: '1px solid #333',
+    borderRadius: '4px',
+    padding: '10px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'background-color 0.3s ease',
+};
 
-const Dashboard: React.FC<DashboardProps> = () => {
+type DashboardProps = {
+    sessionEmail: string;
+    sessionRole: 'admin' | 'user';
+    permanentDeleteLimit: number | null;
+};
+
+type UserFormState = {
+    email: string;
+    password: string;
+    role: 'admin' | 'user';
+    permanentDeleteLimit: string;
+};
+
+type DashboardUser = {
+    email: string;
+    role: 'admin' | 'user';
+    permanentDeleteLimit: number;
+    createdAt: string;
+    immutable?: boolean;
+};
+
+const EMPTY_USER_FORM: UserFormState = {
+    email: '',
+    password: '',
+    role: 'user',
+    permanentDeleteLimit: '2',
+};
+
+// Inputs inside the users panel keep the dashboard palette and monospace type.
+const userInputStyle: React.CSSProperties = {
+    backgroundColor: '#1e1e1e',
+    color: '#e0e0e0',
+    border: '1px solid #333',
+    borderRadius: '4px',
+    padding: '10px',
+    fontSize: '13px',
+    fontFamily: 'monospace',
+    outline: 'none',
+};
+
+const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, permanentDeleteLimit }) => {
+    const isAdmin = sessionRole === 'admin';
     const [pastes, setPastes] = useState<Paste[]>([]);
     const [searchTerm, setSearchTerm] = useState(''); // Estado para el término de búsqueda
     const [filteredPastes, setFilteredPastes] = useState<Paste[]>([]); // Estado para los pastes filtrados
@@ -58,6 +112,13 @@ const Dashboard: React.FC<DashboardProps> = () => {
     const [sortOrder, setSortOrder] = useState<'name' | 'date' | 'permanent' | null>(null);
     const [sortReverse, setSortReverse] = useState(false);
     const [shortDropdownOpen, setShortDropdownOpen] = useState(false);
+    const [passkeyRegistered, setPasskeyRegistered] = useState(false);
+    const [passkeyBusy, setPasskeyBusy] = useState(false);
+    const [users, setUsers] = useState<DashboardUser[]>([]);
+    const [usersLoading, setUsersLoading] = useState(false);
+    const [userForm, setUserForm] = useState<UserFormState>(EMPTY_USER_FORM);
+    const [editingEmail, setEditingEmail] = useState<string | null>(null);
+    const [userBusy, setUserBusy] = useState(false);
 
     const showTooltip = (e: any, text: string, center = false) => {
         if (center) {
@@ -81,6 +142,201 @@ const Dashboard: React.FC<DashboardProps> = () => {
     useEffect(() => {
         setMounted(true);
     }, []);
+
+    useEffect(() => {
+        let active = true;
+        fetch('/api/auth/passkey/status')
+            .then((response) => (response.ok ? response.json() : null))
+            .then((data) => {
+                if (active && data) setPasskeyRegistered(!!data.registered);
+            })
+            .catch(() => {});
+        return () => {
+            active = false;
+        };
+    }, []);
+
+    const handleRegisterPasskey = async () => {
+        if (passkeyBusy) return;
+        try {
+            setPasskeyBusy(true);
+            const optionsResponse = await fetch('/api/auth/passkey/register-options', { method: 'POST' });
+            if (!optionsResponse.ok) {
+                addNotification('Could not start passkey registration.');
+                return;
+            }
+            const optionsJSON = await optionsResponse.json();
+            const registrationResponse = await startRegistration({ optionsJSON });
+
+            const verifyResponse = await fetch('/api/auth/passkey/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ response: registrationResponse }),
+            });
+            if (verifyResponse.ok) {
+                setPasskeyRegistered(true);
+                addNotification('Passkey registered. Password login is now disabled.');
+            } else {
+                const data = await verifyResponse.json();
+                addNotification(data.message || 'Passkey registration failed');
+            }
+        } catch {
+            addNotification('Passkey registration was cancelled.');
+        } finally {
+            setPasskeyBusy(false);
+        }
+    };
+
+    const handleRemovePasskey = async () => {
+        if (passkeyBusy) return;
+        try {
+            setPasskeyBusy(true);
+            const response = await fetch('/api/auth/passkey', { method: 'DELETE' });
+            if (response.ok) {
+                setPasskeyRegistered(false);
+                addNotification('Passkey removed. Password login is enabled again.');
+            } else {
+                addNotification('Failed to remove passkey.');
+            }
+        } catch {
+            addNotification('Failed to remove passkey.');
+        } finally {
+            setPasskeyBusy(false);
+        }
+    };
+
+    const fetchUsers = async () => {
+        if (!isAdmin) return;
+        setUsersLoading(true);
+        try {
+            const response = await fetch('/api/users');
+            if (response.ok) {
+                setUsers(await response.json());
+            } else if (response.status === 403) {
+                addNotification('Admin access is required to manage users.');
+            }
+        } catch {
+            addNotification('Failed to load users.');
+        } finally {
+            setUsersLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchUsers();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isAdmin]);
+
+    const handleEditUser = (user: DashboardUser) => {
+        setEditingEmail(user.email);
+        setUserForm({
+            email: user.email,
+            password: '',
+            role: user.role,
+            permanentDeleteLimit: String(user.permanentDeleteLimit),
+        });
+    };
+
+    const handleCancelUserEdit = () => {
+        setEditingEmail(null);
+        setUserForm(EMPTY_USER_FORM);
+    };
+
+    const handleSubmitUser = async () => {
+        if (userBusy) return;
+
+        const limit = Number(userForm.permanentDeleteLimit);
+        if (!Number.isInteger(limit) || limit < 0) {
+            addNotification('Limit must be an integer greater than or equal to 0.');
+            return;
+        }
+        const passwordRequired = !editingEmail;
+        if (passwordRequired && userForm.password.length < 8) {
+            addNotification('Password must be at least 8 characters.');
+            return;
+        }
+        if (!passwordRequired && userForm.password && userForm.password.length < 8) {
+            addNotification('Password must be at least 8 characters.');
+            return;
+        }
+        if (passwordRequired && !/\S+@\S+\.\S+/.test(userForm.email.trim())) {
+            addNotification('Please enter a valid email.');
+            return;
+        }
+
+        setUserBusy(true);
+        try {
+            if (editingEmail) {
+                const patch: Record<string, unknown> = {
+                    role: userForm.role,
+                    permanentDeleteLimit: limit,
+                };
+                if (userForm.password) patch.password = userForm.password;
+
+                const response = await fetch(`/api/users/${encodeURIComponent(editingEmail)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(patch),
+                });
+                if (response.ok) {
+                    addNotification('User updated.');
+                    handleCancelUserEdit();
+                    await fetchUsers();
+                } else {
+                    const data = await response.json();
+                    addNotification(data.message || 'Failed to update user.');
+                }
+            } else {
+                const response = await fetch('/api/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: userForm.email.trim(),
+                        password: userForm.password,
+                        role: userForm.role,
+                        permanentDeleteLimit: limit,
+                    }),
+                });
+                if (response.status === 201) {
+                    addNotification('User created.');
+                    setUserForm(EMPTY_USER_FORM);
+                    await fetchUsers();
+                } else {
+                    const data = await response.json();
+                    addNotification(data.message || 'Failed to create user.');
+                }
+            }
+        } catch {
+            addNotification('Request failed.');
+        } finally {
+            setUserBusy(false);
+        }
+    };
+
+    const handleDeleteUser = async (user: DashboardUser) => {
+        if (userBusy) return;
+        const confirmed = window.confirm(`Delete the account ${user.email}?`);
+        if (!confirmed) return;
+
+        setUserBusy(true);
+        try {
+            const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, {
+                method: 'DELETE',
+            });
+            if (response.ok) {
+                addNotification('User deleted.');
+                if (editingEmail === user.email) handleCancelUserEdit();
+                await fetchUsers();
+            } else {
+                const data = await response.json();
+                addNotification(data.message || 'Failed to delete user.');
+            }
+        } catch {
+            addNotification('Request failed.');
+        } finally {
+            setUserBusy(false);
+        }
+    };
 
     // Fetch paged pastes; force bypasses server-side cache when needed.
     const fetchPastes = async (force = false) => {
@@ -584,10 +840,36 @@ const Dashboard: React.FC<DashboardProps> = () => {
                         className="dashboard-search"
                     />
                 </div>
-                <button onClick={handleLogout} className="logout-button">
-                    <FiLogOut className="logout-icon" />
-                    Logout
-                </button>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button
+                        onClick={handleRegisterPasskey}
+                        disabled={passkeyRegistered || passkeyBusy}
+                        style={{
+                            ...passkeyButtonStyle,
+                            color: passkeyRegistered ? '#666' : '#e0e0e0',
+                            cursor: passkeyRegistered || passkeyBusy ? 'default' : 'pointer',
+                        }}
+                        title={passkeyRegistered ? 'Passkey registered' : 'Register a passkey'}
+                        aria-label={passkeyRegistered ? 'Passkey registered' : 'Register a passkey'}
+                    >
+                        <FiKey size={20} />
+                    </button>
+                    {passkeyRegistered && (
+                        <button
+                            onClick={handleRemovePasskey}
+                            disabled={passkeyBusy}
+                            style={passkeyButtonStyle}
+                            title="Remove passkey"
+                            aria-label="Remove passkey"
+                        >
+                            <FiTrash2 size={20} />
+                        </button>
+                    )}
+                    <button onClick={handleLogout} className="logout-button">
+                        <FiLogOut className="logout-icon" />
+                        Logout
+                    </button>
+                </div>
             </div>
             {/* Contadores de pastes */}
             <div className="counters">
@@ -625,6 +907,140 @@ const Dashboard: React.FC<DashboardProps> = () => {
                     <div style={{ fontSize: '22px', fontWeight: 700 }}>{pastes.filter((p) => !p.permanent).length}</div>
                 </div>
             </div>
+            {isAdmin && (
+                <div
+                    className="card"
+                    style={{ marginTop: 0, marginBottom: 24, padding: '24px 28px', fontFamily: 'monospace' }}
+                >
+                    <h2 className="card-title" style={{ fontSize: '1.6rem', marginBottom: 16, fontFamily: 'monospace' }}>
+                        Users
+                    </h2>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+                        <input
+                            type="email"
+                            placeholder="email"
+                            value={userForm.email}
+                            onChange={(e) => setUserForm((s) => ({ ...s, email: e.target.value }))}
+                            disabled={!!editingEmail}
+                            style={{ ...userInputStyle, flex: '1 1 220px', color: editingEmail ? '#888' : '#e0e0e0' }}
+                        />
+                        <input
+                            type="password"
+                            placeholder={editingEmail ? 'New password (optional)' : 'password'}
+                            value={userForm.password}
+                            onChange={(e) => setUserForm((s) => ({ ...s, password: e.target.value }))}
+                            style={{ ...userInputStyle, flex: '1 1 180px' }}
+                        />
+                        <select
+                            value={userForm.role}
+                            onChange={(e) => setUserForm((s) => ({ ...s, role: e.target.value as 'admin' | 'user' }))}
+                            style={{ ...userInputStyle, flex: '0 0 120px' }}
+                        >
+                            <option value="user">user</option>
+                            <option value="admin">admin</option>
+                        </select>
+                        <input
+                            type="number"
+                            min={0}
+                            placeholder="limit"
+                            value={userForm.permanentDeleteLimit}
+                            onChange={(e) => setUserForm((s) => ({ ...s, permanentDeleteLimit: e.target.value }))}
+                            title="Permanent delete limit (ignored for admins)"
+                            style={{ ...userInputStyle, flex: '0 0 100px' }}
+                        />
+                        <button
+                            onClick={handleSubmitUser}
+                            disabled={userBusy}
+                            style={{ ...passkeyButtonStyle, gap: 6, padding: '10px 14px', fontFamily: 'monospace' }}
+                            title={editingEmail ? 'Save changes' : 'Create user'}
+                            aria-label={editingEmail ? 'Save changes' : 'Create user'}
+                        >
+                            <FiUserPlus size={20} />
+                            {editingEmail ? 'Save' : 'Create'}
+                        </button>
+                        {editingEmail && (
+                            <button
+                                onClick={handleCancelUserEdit}
+                                style={{ ...passkeyButtonStyle, padding: '10px 14px', fontFamily: 'monospace' }}
+                            >
+                                Cancel
+                            </button>
+                        )}
+                    </div>
+
+                    {usersLoading ? (
+                        <div style={{ color: '#888', fontSize: 13 }}>Loading users...</div>
+                    ) : (
+                        <div>
+                            <div
+                                style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: '2fr 1fr 1fr 100px',
+                                    borderBottom: '1px solid #333',
+                                    padding: '8px 4px',
+                                    color: '#888',
+                                    fontSize: 12,
+                                }}
+                            >
+                                <div>Email</div>
+                                <div>Role</div>
+                                <div>Limit</div>
+                                <div style={{ textAlign: 'right' }}>Actions</div>
+                            </div>
+                            {users.map((user) => (
+                                <div
+                                    key={user.email}
+                                    style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: '2fr 1fr 1fr 100px',
+                                        alignItems: 'center',
+                                        borderBottom: '1px solid #222',
+                                        padding: '8px 4px',
+                                        color: '#e0e0e0',
+                                        fontSize: 13,
+                                    }}
+                                >
+                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {user.email}
+                                        {user.immutable ? <span style={{ color: '#888' }}> (environment)</span> : null}
+                                    </div>
+                                    <div>{user.role}</div>
+                                    <div>{user.role === 'admin' ? '—' : user.permanentDeleteLimit}</div>
+                                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                        {!user.immutable && (
+                                            <>
+                                                <button
+                                                    onClick={() => handleEditUser(user)}
+                                                    style={passkeyButtonStyle}
+                                                    title="Edit user"
+                                                    aria-label={`Edit ${user.email}`}
+                                                >
+                                                    <FaPen size={20} />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeleteUser(user)}
+                                                    style={passkeyButtonStyle}
+                                                    title="Delete user"
+                                                    aria-label={`Delete ${user.email}`}
+                                                >
+                                                    <FaTrash size={20} />
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {!isAdmin && permanentDeleteLimit !== null && (
+                <div style={{ color: '#888', fontSize: 13, marginBottom: 16 }}>
+                    {sessionEmail}: you can delete up to {permanentDeleteLimit} permanent paste
+                    {permanentDeleteLimit === 1 ? '' : 's'} per operation.
+                </div>
+            )}
             {/* Main content */}
             <div className="dashboard-content">
                 <div className="card">
@@ -1661,7 +2077,7 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
     const { verifySessionToken } = await import('../utils/auth');
     const session = verifySessionToken(cookies['auth-token']);
 
-    if (!session || session.role !== 'admin') {
+    if (!session) {
         return {
             redirect: {
                 destination: '/login',
@@ -1670,7 +2086,14 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
         };
     }
 
+    const { getPermanentDeleteLimit } = await import('../utils/users');
+    const limit = session.role === 'admin' ? null : await getPermanentDeleteLimit(session.email);
+
     return {
-        props: {},
+        props: {
+            sessionEmail: session.email,
+            sessionRole: session.role,
+            permanentDeleteLimit: typeof limit === 'number' && Number.isFinite(limit) ? limit : null,
+        },
     };
 };

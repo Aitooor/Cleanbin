@@ -7,6 +7,7 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
 } from '../../utils/auth';
+import { getPasskey } from '../../utils/passkeys';
 
 // Cap the request body size for this route.
 export const config = {
@@ -32,6 +33,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { email, password } = req.body || {};
       if (typeof email !== 'string' || typeof password !== 'string') {
         return res.status(401).json({ message: 'Invalid credentials' });
+      }
+
+      // Once a passkey is registered it becomes the only way in for its owner
+      // (the environment admin), by design. Other accounts keep using passwords.
+      const passkey = await getPasskey();
+      if (passkey && email === passkey.email) {
+        return res.status(403).json({
+          message:
+            'Password login is disabled because a passkey is registered. Use the passkey or remove it from the dashboard.',
+        });
       }
 
       const auth = await authenticateCredentials(email, password);

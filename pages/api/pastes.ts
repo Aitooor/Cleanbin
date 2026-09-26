@@ -3,6 +3,7 @@ import { savePaste, getPastes, deletePaste, getAllPastes } from '../../utils/db'
 import { getPage, invalidateCache, removePasteFromCache } from '../../utils/pastesCache';
 import { postMessage } from '../../utils/broadcast';
 import { getSessionFromRequest, requireSession } from '../../utils/auth';
+import { getPermanentDeleteLimit } from '../../utils/users';
 import { isValidPasteId, MAX_PASTE_CONTENT_LENGTH } from '../../utils/validation';
 
 // Cap the request body size for this route (content is validated again per-request).
@@ -160,6 +161,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (Array.isArray(filterRules) && filterRules.length > 0);
 
       let toDeleteIds: string[] = [];
+      // Keep the loaded snapshot around so the non-admin limit check does not
+      // re-read the whole database.
+      let loadedPastes: any[] | null = null;
 
       if (hasIds) {
         // Delete exactly the provided ids.
@@ -179,6 +183,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!all) {
           return res.status(500).json({ message: 'Failed to load pastes for deletion' });
         }
+        loadedPastes = all;
 
         const type = (req.query.type as string) || body.type || 'all';
         let base = all;
@@ -195,6 +200,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           toDeleteIds = base.filter((item: any) => matchesSimpleFilter(item, filter, field)).map((p: any) => p.id);
         } else {
           toDeleteIds = base.map((p: any) => p.id);
+        }
+      }
+
+      // Non-admins may only delete a bounded number of permanent pastes per
+      // operation. Temporary pastes do not count towards the limit.
+      if (session.role !== 'admin') {
+        let all = loadedPastes;
+        if (!all) {
+          all = await getAllPastes().catch(() => null);
+        }
+        if (!all) {
+          return res.status(500).json({ message: 'Failed to load pastes for deletion' });
+        }
+
+        const permanentIds = new Set(
+          all.filter(isPermanentPaste).map((paste: any) => paste.id)
+        );
+        const permanentCount = toDeleteIds.filter((id) => permanentIds.has(id)).length;
+        const limit = await getPermanentDeleteLimit(session.email);
+
+        if (permanentCount > limit) {
+          return res.status(403).json({
+            error: `You can delete at most ${limit} permanent paste(s) per operation (requested ${permanentCount}).`,
+          });
         }
       }
 
