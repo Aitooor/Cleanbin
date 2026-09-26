@@ -474,101 +474,87 @@ const PastePreview = () => {
                 flexDirection: 'column',
             }}
         >
+            {/* Single discreet card: expiry, name and the new-paste shortcut. */}
             <div
                 style={{
                     position: 'fixed',
                     top: 12,
                     right: 12,
                     zIndex: 10,
+                    maxWidth: 240,
+                    padding: 8,
+                    background: 'rgba(40, 40, 40, 0.92)',
+                    border: '1px solid rgba(255,255,255,0.12)',
+                    borderRadius: 8,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'flex-end',
-                    gap: 8,
+                    gap: 6,
                 }}
             >
-            {(name || (!permanent && timeLeftLabel)) && (
-                <div
-                    style={{
-                        maxWidth: 220,
-                        padding: '8px 12px',
-                        background: 'rgba(40, 40, 40, 0.92)',
-                        border: '1px solid rgba(255,255,255,0.12)',
-                        borderRadius: 8,
-                        fontSize: 13,
-                        color: '#b0b0b0',
-                        fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-                        overflow: 'hidden',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                    }}
-                >
-                    {!permanent && timeLeftLabel && (
-                        <div
-                            style={{
-                                marginBottom: 4,
-                                fontSize: 11,
-                                color: '#ffb74d',
-                                whiteSpace: 'nowrap',
-                            }}
-                        >
-                            {timeLeftLabel}
-                        </div>
-                    )}
-                    {name && (
-                        <div
-                            title={name || 'Untitled'}
-                            dangerouslySetInnerHTML={{
-                                __html: (() => {
-                                    const HR_PLACEHOLDER = '\u0001HR\u0001';
-                                    const hrHtml =
-                                        '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
-                                    return name
-                                        .replace(/<br\s*\/?/gi, '\n')
-                                        .replace(/<hr\s*\/?/gi, HR_PLACEHOLDER)
-                                        .replace(/&/g, '&amp;')
-                                        .replace(/</g, '&lt;')
-                                        .replace(/>/g, '&gt;')
-                                        .replace(/"/g, '&quot;')
-                                        .replace(/\n/g, '<br />')
-                                        .split(HR_PLACEHOLDER)
-                                        .join(hrHtml);
-                                })(),
-                            }}
-                        />
-                    )}
-                </div>
-            )}
-                {/* Discreet shortcut back to a fresh editor. */}
-                <div
-                    style={{
-                        padding: 5,
-                        background: 'rgba(40, 40, 40, 0.92)',
-                        border: '1px solid rgba(255,255,255,0.12)',
-                        borderRadius: 8,
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-                    }}
-                >
-                    <button
-                        onClick={() => router.push('/')}
-                        title="New"
-                        aria-label="New paste"
+                {!permanent && timeLeftLabel && (
+                    <div
                         style={{
-                            backgroundColor: '#1e1e1e',
-                            color: '#b0b0b0',
-                            border: '1px solid #333',
-                            borderRadius: '4px',
-                            padding: '10px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            transition: 'background-color 0.3s ease',
+                            fontSize: 11,
+                            color: '#ffb74d',
+                            whiteSpace: 'nowrap',
                         }}
                     >
-                        <FiFilePlus size={20} />
-                    </button>
-                </div>
+                        {timeLeftLabel}
+                    </div>
+                )}
+                {name && (
+                    <div
+                        title={name || 'Untitled'}
+                        style={{
+                            maxWidth: 220,
+                            fontSize: 13,
+                            color: '#b0b0b0',
+                            fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
+                            textAlign: 'right',
+                            overflow: 'hidden',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                        }}
+                        dangerouslySetInnerHTML={{
+                            __html: (() => {
+                                const HR_PLACEHOLDER = '\u0001HR\u0001';
+                                const hrHtml =
+                                    '<hr style="margin:6px 0;border:none;border-top:1px solid rgba(255,255,255,0.25);" />';
+                                return name
+                                    .replace(/<br\s*\/?/gi, '\n')
+                                    .replace(/<hr\s*\/?/gi, HR_PLACEHOLDER)
+                                    .replace(/&/g, '&amp;')
+                                    .replace(/</g, '&lt;')
+                                    .replace(/>/g, '&gt;')
+                                    .replace(/"/g, '&quot;')
+                                    .replace(/\n/g, '<br />')
+                                    .split(HR_PLACEHOLDER)
+                                    .join(hrHtml);
+                            })(),
+                        }}
+                    />
+                )}
+                <button
+                    onClick={() => router.push('/')}
+                    title="New"
+                    aria-label="New paste"
+                    style={{
+                        backgroundColor: '#1e1e1e',
+                        color: '#b0b0b0',
+                        border: '1px solid #333',
+                        borderRadius: '4px',
+                        padding: '10px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'background-color 0.3s ease',
+                    }}
+                >
+                    <FiFilePlus size={20} />
+                </button>
             </div>
             <div
                 style={{

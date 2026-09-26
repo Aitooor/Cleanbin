@@ -45,6 +45,11 @@ button:hover {
   background-color: #1565c0; /* Darker shade on hover */
 }
 
+/* Login page: keep the outlined secondary button dark on hover. */
+.login-secondary-button:hover {
+  background-color: #2a2a2a !important;
+}
+
 input, textarea, select {
   background-color: #1e1e1e;
   color: #e0e0e0;
