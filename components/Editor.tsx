@@ -1,11 +1,28 @@
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import { useNotification } from './NotificationProvider';
-import { FiSave, FiFilePlus } from 'react-icons/fi'; // Importa iconos modernos
+import { FiSave, FiFilePlus, FiSliders, FiLogIn } from 'react-icons/fi'; // Importa iconos modernos
+
+// Square icon button: same geometry as the New/Save buttons (20px icon + 10px padding + border).
+const iconButtonStyle: React.CSSProperties = {
+    backgroundColor: '#1e1e1e',
+    color: '#e0e0e0',
+    border: '1px solid #333',
+    borderRadius: '4px',
+    padding: '10px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'background-color 0.3s ease',
+};
 
 const Editor = () => {
+    const router = useRouter();
     const [content, setContent] = useState('');
     const [name, setName] = useState('');
     const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const [isAdmin, setIsAdmin] = useState(false);
     // default Temp instead of Permanent when logged in
     const [isPermanent, setIsPermanent] = useState(false);
     const { addNotification } = useNotification();
@@ -16,7 +33,9 @@ const Editor = () => {
         fetch('/api/auth', { method: 'GET' })
             .then((response) => (response.ok ? response.json() : null))
             .then((data) => {
-                if (active && data) setIsLoggedIn(!!data.authenticated);
+                if (!active || !data) return;
+                setIsLoggedIn(!!data.authenticated);
+                setIsAdmin(!!data.authenticated && data.role === 'admin');
             })
             .catch(() => {});
         return () => {
@@ -114,6 +133,27 @@ const Editor = () => {
                     borderRadius: '8px',
                 }}
             >
+                {/* Admin shortcut: only visible to a logged in admin. Discreet login icon otherwise. */}
+                {isAdmin && (
+                    <button
+                        onClick={() => router.push('/dashboard')}
+                        style={iconButtonStyle}
+                        title="Admin panel"
+                        aria-label="Admin panel"
+                    >
+                        <FiSliders size={20} />
+                    </button>
+                )}
+                {!isLoggedIn && (
+                    <button
+                        onClick={() => router.push('/login')}
+                        style={{ ...iconButtonStyle, color: '#888' }}
+                        title="Log in"
+                        aria-label="Log in"
+                    >
+                        <FiLogIn size={20} />
+                    </button>
+                )}
                 {isLoggedIn && (
                     <button
                         onClick={() => setIsPermanent((p) => !p)}
