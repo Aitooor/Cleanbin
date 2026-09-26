@@ -462,6 +462,7 @@ class JsonDatabase implements DatabaseBackend {
       throw e;
     });
     for (const file of files) {
+      if (!file.endsWith('.json') || file.startsWith('.')) continue;
       const filePath = pathModule!.join(this.jsonPath, file);
       const fileBuffer = await fs!.readFile(filePath);
       const decompressed = await decompressBuffer(fileBuffer);
@@ -480,6 +481,10 @@ class JsonDatabase implements DatabaseBackend {
     });
     const out: Paste[] = [];
     for (const file of files) {
+      // Only real paste files: skip the atomic-write temp files
+      // (`.id.json.pid.tmp`) that a concurrent write may leave in the directory,
+      // which would otherwise be read and then vanish (ENOENT).
+      if (!file.endsWith('.json') || file.startsWith('.')) continue;
       const filePath = pathModule!.join(this.jsonPath, file);
       const fileBuffer = await fs!.readFile(filePath);
       const decompressed = await decompressBuffer(fileBuffer);

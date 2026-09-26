@@ -8,13 +8,16 @@ import {
     FiEye,
     FiFilter,
     FiSave,
+    FiSearch,
     FiShare2,
     FiTrash2,
     FiUsers,
+    FiX,
 } from 'react-icons/fi';
 import DashboardLayout from '../../components/dashboard/DashboardLayout';
-import BulkDeleteModal, { type BulkDeleteRequest } from '../../components/dashboard/BulkDeleteModal';
+import BulkDeleteModal, { type BulkDeleteMode } from '../../components/dashboard/BulkDeleteModal';
 import ConfirmModal, { type ConfirmRequest } from '../../components/dashboard/ConfirmModal';
+import FiltersPanel from '../../components/dashboard/FiltersPanel';
 import {
     Badge,
     Button,
@@ -30,21 +33,33 @@ import {
     Table,
     Textarea,
 } from '../../components/dashboard/ui';
-import type { DashboardSession, DashboardUser, Paste, PasteScope, TableColumn } from '../../components/dashboard/types';
+import type {
+    DashboardSession,
+    DashboardUser,
+    Paste,
+    PasteFilterRule,
+    PasteListQuery,
+    PasteMatchMode,
+    PasteScope,
+    PasteSortDir,
+    PasteSortField,
+    TableColumn,
+} from '../../components/dashboard/types';
 import { usePastes } from '../../components/dashboard/usePastes';
 import { formatDateTime } from '../../components/dashboard/format';
 import { getDashboardSessionProps } from '../../utils/dashboardSession';
 import { useNotification } from '../../components/NotificationProvider';
-import AdvancedFilters from '../../components/AdvancedFilters';
 
-type SortOrder = 'name' | 'date' | 'permanent' | null;
+// Encoded sort options for the single order select. Encodes both the field and
+// the direction so there is no separate, ambiguous "Normal/Reverse" control.
+type SortValue = 'default' | 'createdAt:desc' | 'createdAt:asc' | 'name:asc' | 'name:desc';
 
-type AdvancedFilterRule = {
-    field: 'any' | 'name' | 'content' | 'id';
-    op: 'contains' | 'exact' | 'starts' | 'regex';
-    value: string;
-    permanent?: 'yes' | 'no' | 'any';
-};
+const SORT_OPTIONS: Array<{ value: SortValue; label: string }> = [
+    { value: 'default', label: 'Newest first' },
+    { value: 'createdAt:asc', label: 'Oldest first' },
+    { value: 'name:asc', label: 'Name A→Z' },
+    { value: 'name:desc', label: 'Name Z→A' },
+];
 
 type EditState = {
     id: string;
@@ -67,21 +82,24 @@ type ShareState = {
     busy: boolean;
 };
 
-const DEFAULT_ADVANCED_FILTERS: AdvancedFilterRule[] = [{ field: 'any', op: 'contains', value: '', permanent: 'any' }];
+const DEFAULT_FILTER_RULES: PasteFilterRule[] = [];
 const PRESENCE_POLL_MS = 5000;
+const SEARCH_DEBOUNCE_MS = 300;
 
 function isPermanent(paste: Paste): boolean {
     return String(paste.permanent) === 'true' || paste.permanent === true;
 }
 
-function sortPastes(pastes: Paste[], order: SortOrder, reverse: boolean): Paste[] {
-    if (!order) return pastes;
-    const sorted = [...pastes].sort((a, b) => {
-        if (order === 'name') return (a.name || '').localeCompare(b.name || '');
-        if (order === 'date') return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
-        return (isPermanent(a) ? 1 : 0) - (isPermanent(b) ? 1 : 0);
-    });
-    return reverse ? sorted.reverse() : sorted;
+// Splits the encoded sort option into the API `sort`/`dir` pair.
+function decodeSort(value: SortValue): { sort: PasteSortField | null; dir: PasteSortDir } {
+    if (value === 'default') return { sort: null, dir: 'desc' };
+    const [field, dir] = value.split(':');
+    return { sort: field as PasteSortField, dir: dir as PasteSortDir };
+}
+
+function describeRule(rule: PasteFilterRule): string {
+    const field = rule.field === 'any' ? 'any field' : rule.field === 'id' ? 'UUID' : rule.field;
+    return `${rule.negate ? 'not ' : ''}${field} ${rule.op} “${rule.value}”`;
 }
 
 export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteLimit }: DashboardSession) {
@@ -90,15 +108,29 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
     const isAdmin = sessionRole === 'admin';
 
     const [scope, setScope] = useState<PasteScope>(isAdmin ? 'all' : 'default');
-    const { items, total, page, totalPages, loading, error, setPage, refresh, removeIds, updatePaste } = usePastes(50, scope);
+    const [searchInput, setSearchInput] = useState('');
+    const [debouncedQuery, setDebouncedQuery] = useState('');
+    const [sortValue, setSortValue] = useState<SortValue>('default');
+    const [showFilters, setShowFilters] = useState(false);
+    const [draftRules, setDraftRules] = useState<PasteFilterRule[]>(DEFAULT_FILTER_RULES);
+    const [activeRules, setActiveRules] = useState<PasteFilterRule[]>(DEFAULT_FILTER_RULES);
+    const [matchMode, setMatchMode] = useState<PasteMatchMode>('AND');
 
-    const [searchTerm, setSearchTerm] = useState('');
-    const [sortOrder, setSortOrder] = useState<SortOrder>(null);
-    const [sortReverse, setSortReverse] = useState(false);
-    const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
-    const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterRule[]>(DEFAULT_ADVANCED_FILTERS);
+    // One request per pause in typing, not one per keystroke.
+    useEffect(() => {
+        const timer = window.setTimeout(() => setDebouncedQuery(searchInput.trim()), SEARCH_DEBOUNCE_MS);
+        return () => window.clearTimeout(timer);
+    }, [searchInput]);
+
+    const listQuery = useMemo<PasteListQuery>(() => {
+        const { sort, dir } = decodeSort(sortValue);
+        return { scope, query: debouncedQuery, filterRules: activeRules, matchMode, sort, dir };
+    }, [scope, debouncedQuery, activeRules, matchMode, sortValue]);
+
+    const { items, total, page, totalPages, loading, error, setPage, refresh, removeIds, updatePaste } = usePastes(50, listQuery);
+
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-    const [deleteRequest, setDeleteRequest] = useState<BulkDeleteRequest | null>(null);
+    const [deleteMode, setDeleteMode] = useState<BulkDeleteMode | null>(null);
     const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
     const [editing, setEditing] = useState<EditState | null>(null);
@@ -106,26 +138,14 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
     const [users, setUsers] = useState<DashboardUser[]>([]);
     const [presence, setPresence] = useState<Record<string, string[]>>({});
 
-    const filteredPastes = useMemo(() => {
-        const query = searchTerm.trim().toLowerCase();
-        const filtered = query
-            ? items.filter(
-                  (paste) =>
-                      paste.name?.toLowerCase().includes(query) ||
-                      paste.content?.toLowerCase().includes(query) ||
-                      paste.id?.toLowerCase().includes(query) ||
-                      paste.owner?.toLowerCase().includes(query)
-              )
-            : items;
-        return sortPastes(filtered, sortOrder, sortReverse);
-    }, [items, searchTerm, sortOrder, sortReverse]);
+    const allSelected = items.length > 0 && items.every((paste) => selectedIds.has(paste.id));
 
-    const allSelected = filteredPastes.length > 0 && filteredPastes.every((paste) => selectedIds.has(paste.id));
-
-    // Clear the selection whenever the visible set (scope) changes.
+    // A selection only ever refers to the rows on screen: changing the page,
+    // the scope or any filter clears it so we never delete what we cannot see.
+    const selectionKey = `${page}|${JSON.stringify(listQuery)}`;
     useEffect(() => {
         setSelectedIds(new Set());
-    }, [scope]);
+    }, [selectionKey]);
 
     // User directory (admin only) powers the Share modal's email suggestions.
     useEffect(() => {
@@ -266,15 +286,7 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
     };
 
     const toggleSelectAll = (checked: boolean) => {
-        setSelectedIds(checked ? new Set(filteredPastes.map((paste) => paste.id)) : new Set());
-    };
-
-    const handleAddToSelection = (ids: string[]) => {
-        setSelectedIds((prev) => {
-            const next = new Set(prev);
-            ids.forEach((id) => next.add(id));
-            return next;
-        });
+        setSelectedIds(checked ? new Set(items.map((paste) => paste.id)) : new Set());
     };
 
     const handleDeleted = (ids: string[]) => {
@@ -284,9 +296,25 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
             ids.forEach((id) => next.delete(id));
             return next;
         });
-        if (ids.length === 0 && !searchTerm) refresh();
+        // Refresh so the counters and pagination reflect the server's new state.
+        refresh();
         addNotification(`Deleted ${ids.length} paste${ids.length === 1 ? '' : 's'}.`);
         void postBroadcast({ type: 'pastes_bulk_deleted', ids });
+    };
+
+    const clearFilters = useCallback(() => {
+        setSearchInput('');
+        setDebouncedQuery('');
+        setSortValue('default');
+        setDraftRules(DEFAULT_FILTER_RULES);
+        setActiveRules(DEFAULT_FILTER_RULES);
+        setMatchMode('AND');
+    }, []);
+
+    const openDelete = () => {
+        const defaultMode: BulkDeleteMode =
+            selectedIds.size > 0 ? 'selected' : debouncedQuery || activeRules.length > 0 ? 'filtered' : 'all';
+        setDeleteMode(defaultMode);
     };
 
     const performDeletePaste = async (paste: Paste) => {
@@ -547,7 +575,25 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
               { value: 'shared', label: 'Shared with me' },
           ];
 
-    const hasFilters = searchTerm.trim().length > 0 || sortOrder !== null;
+    const hasActiveFilters = debouncedQuery.length > 0 || activeRules.length > 0 || sortValue !== 'default';
+
+    // One removable chip per active filter. The scope stays in its labelled
+    // select; everything that narrows or reorders the list shows up here.
+    const filterChips: Array<{ key: string; label: string; onRemove: () => void }> = [];
+    if (debouncedQuery) {
+        filterChips.push({ key: 'query', label: `search: ${debouncedQuery}`, onRemove: () => setSearchInput('') });
+    }
+    activeRules.forEach((rule, index) => {
+        filterChips.push({
+            key: `rule-${index}`,
+            label: describeRule(rule),
+            onRemove: () => setActiveRules((prev) => prev.filter((_, i) => i !== index)),
+        });
+    });
+    if (sortValue !== 'default') {
+        const label = SORT_OPTIONS.find((option) => option.value === sortValue)?.label ?? sortValue;
+        filterChips.push({ key: 'sort', label: label.replace(/^Sort:\s*/, 'sort: '), onRemove: () => setSortValue('default') });
+    }
 
     return (
         <DashboardLayout sessionEmail={sessionEmail} sessionRole={sessionRole} permanentDeleteLimit={permanentDeleteLimit}>
@@ -563,14 +609,17 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
 
             <Card animationDelay={0}>
                 <div className="dash-toolbar">
-                    <Input
-                        className="dash-search"
-                        type="search"
-                        placeholder="Search name, content, owner or UUID..."
-                        value={searchTerm}
-                        onChange={(event) => setSearchTerm(event.target.value)}
-                        aria-label="Search pastes"
-                    />
+                    <div className="dash-search-wrap">
+                        <FiSearch className="dash-search-icon" aria-hidden="true" />
+                        <Input
+                            className="dash-search"
+                            type="search"
+                            placeholder="Search name, content, owner or UUID…"
+                            value={searchInput}
+                            onChange={(event) => setSearchInput(event.target.value)}
+                            aria-label="Search pastes"
+                        />
+                    </div>
                     <Select
                         value={scope}
                         onChange={(event) => setScope(event.target.value as PasteScope)}
@@ -582,73 +631,78 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
                             </option>
                         ))}
                     </Select>
-                    <Select
-                        value={sortOrder ?? 'default'}
-                        onChange={(event) => {
-                            const value = event.target.value;
-                            setSortOrder(value === 'default' ? null : (value as SortOrder));
-                        }}
-                        aria-label="Sort pastes"
-                    >
-                        <option value="default">Sort: default</option>
-                        <option value="name">Sort by name</option>
-                        <option value="date">Sort by date</option>
-                        <option value="permanent">Sort by type</option>
+                    <Select value={sortValue} onChange={(event) => setSortValue(event.target.value as SortValue)} aria-label="Sort pastes">
+                        {SORT_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                                {option.label}
+                            </option>
+                        ))}
                     </Select>
-                    <Button variant="ghost" onClick={() => setSortReverse((prev) => !prev)} disabled={!sortOrder}>
-                        {sortReverse ? 'Reverse' : 'Normal'}
+                    <Button
+                        variant={showFilters || activeRules.length > 0 ? 'secondary' : 'ghost'}
+                        icon={<FiFilter />}
+                        aria-expanded={showFilters}
+                        onClick={() => {
+                            setDraftRules(activeRules);
+                            setShowFilters((prev) => !prev);
+                        }}
+                    >
+                        Filters{activeRules.length > 0 ? ` (${activeRules.length})` : ''}
                     </Button>
-                    <Button variant="ghost" icon={<FiFilter />} onClick={() => setShowAdvancedFilter((prev) => !prev)}>
-                        {showAdvancedFilter ? 'Hide filters' : 'Filters'}
-                    </Button>
-                    {hasFilters && (
-                        <Button
-                            variant="ghost"
-                            onClick={() => {
-                                setSearchTerm('');
-                                setSortOrder(null);
-                                setSortReverse(false);
-                                setAdvancedFilters(DEFAULT_ADVANCED_FILTERS);
-                            }}
-                        >
-                            Clear
+                    <div className="dash-toolbar-end">
+                        {selectedIds.size > 0 ? (
+                            <span className="dash-selection" aria-live="polite">
+                                <span className="dash-selection-count">{selectedIds.size} selected</span>
+                                <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+                                    Clear
+                                </Button>
+                            </span>
+                        ) : (
+                            <span className="dash-results" aria-live="polite">
+                                {total} paste{total === 1 ? '' : 's'}
+                                {total > 0 ? ` · page ${page} of ${totalPages}` : ''}
+                            </span>
+                        )}
+                        <Button variant="danger-ghost" icon={<FiTrash2 />} onClick={openDelete} disabled={total === 0}>
+                            Delete…
                         </Button>
-                    )}
-                    <span className="dash-toolbar-spacer" />
-                    <span className="dash-muted">
-                        {selectedIds.size} selected
-                    </span>
+                    </div>
                 </div>
 
-                {showAdvancedFilter && (
-                    <div style={{ marginBottom: 'var(--dash-space-4)' }}>
-                        <AdvancedFilters
-                            advancedFilters={advancedFilters as never}
-                            setAdvancedFilters={setAdvancedFilters as never}
-                            setSearchTerm={setSearchTerm}
-                            setShowAdvancedFilter={setShowAdvancedFilter}
-                        />
+                {filterChips.length > 0 && (
+                    <div className="dash-chips">
+                        {filterChips.map((chip) => (
+                            <span className="dash-chip" key={chip.key}>
+                                {chip.label}
+                                <button type="button" className="dash-chip-x" aria-label={`Remove filter ${chip.label}`} onClick={chip.onRemove}>
+                                    <FiX size={12} />
+                                </button>
+                            </span>
+                        ))}
+                        <button type="button" className="dash-chip-clear" onClick={clearFilters}>
+                            Clear all
+                        </button>
                     </div>
                 )}
 
-                <div className="dash-row" role="toolbar" aria-label="Delete options" style={{ marginBottom: 'var(--dash-space-4)' }}>
-                    <Button variant="danger" size="sm" onClick={() => setDeleteRequest({ mode: 'all' })}>
-                        All
-                    </Button>
-                    <Button variant="warning" size="sm" onClick={() => setDeleteRequest({ mode: 'permanent' })}>
-                        Permanent
-                    </Button>
-                    <Button variant="primary" size="sm" onClick={() => setDeleteRequest({ mode: 'temporary' })}>
-                        Temporary
-                    </Button>
-                    <Button size="sm" onClick={() => setDeleteRequest({ mode: 'filtered', filter: searchTerm })}>
-                        Filtered
-                    </Button>
-                    <Button variant="permanent" size="sm" disabled={selectedIds.size === 0} onClick={() => setDeleteRequest({ mode: 'selected' })}>
-                        Selected ({selectedIds.size})
-                    </Button>
-                    <span className="dash-faint">Bulk deletes are irreversible.</span>
-                </div>
+                {showFilters && (
+                    <div style={{ marginBottom: 'var(--dash-space-4)' }}>
+                        <FiltersPanel
+                            rules={draftRules}
+                            matchMode={matchMode}
+                            onRulesChange={setDraftRules}
+                            onMatchModeChange={setMatchMode}
+                            onApply={() => {
+                                setActiveRules(draftRules.filter((rule) => rule.value.trim().length > 0));
+                                setShowFilters(false);
+                            }}
+                            onClear={() => {
+                                setDraftRules(DEFAULT_FILTER_RULES);
+                                setActiveRules(DEFAULT_FILTER_RULES);
+                            }}
+                        />
+                    </div>
+                )}
 
                 {error && <Callout tone="danger">{error}</Callout>}
 
@@ -657,28 +711,22 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
                 ) : (
                     <Table
                         columns={columns}
-                        rows={filteredPastes}
+                        rows={items}
                         rowKey={(row) => row.id}
                         empty={
                             <EmptyState
                                 icon={<FiFilter size={26} />}
-                                title={hasFilters ? 'No matches' : 'No pastes yet'}
+                                title={hasActiveFilters ? 'No matches' : 'No pastes yet'}
                                 description={
-                                    hasFilters
+                                    hasActiveFilters
                                         ? 'No paste matches the current search or filters.'
                                         : isAdmin
                                           ? 'Pastes created by any user will show up here.'
                                           : 'Create your first paste or ask a teammate to share one with you.'
                                 }
                                 action={
-                                    hasFilters ? (
-                                        <Button
-                                            variant="ghost"
-                                            onClick={() => {
-                                                setSearchTerm('');
-                                                setAdvancedFilters(DEFAULT_ADVANCED_FILTERS);
-                                            }}
-                                        >
+                                    hasActiveFilters ? (
+                                        <Button variant="ghost" onClick={clearFilters}>
                                             Clear filters
                                         </Button>
                                     ) : (
@@ -705,13 +753,17 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
                 </div>
             </Card>
 
-            {deleteRequest && (
+            {deleteMode && (
                 <BulkDeleteModal
-                    request={deleteRequest}
+                    defaultMode={deleteMode}
                     selectedIds={Array.from(selectedIds)}
-                    onClose={() => setDeleteRequest(null)}
+                    selectedRows={items.filter((paste) => selectedIds.has(paste.id))}
+                    scope={scope}
+                    query={debouncedQuery}
+                    filterRules={activeRules}
+                    matchMode={matchMode}
+                    onClose={() => setDeleteMode(null)}
                     onDeleted={handleDeleted}
-                    onAddToSelection={handleAddToSelection}
                 />
             )}
 

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { PagedResponse, Paste, PasteScope } from './types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PagedResponse, Paste, PasteListQuery } from './types';
 
 export type UsePastesResult = {
     items: Paste[];
@@ -16,16 +16,47 @@ export type UsePastesResult = {
     updateName: (id: string, name: string) => void;
 };
 
-// Owns the paged paste listing: one request per page against
-// /api/pastes?page=N&limit=pageSize&scope=..., with a request guard so a slow
-// response never overwrites a newer page.
-export function usePastes(pageSize = 50, scope: PasteScope = 'default'): UsePastesResult {
+// Serialises the listing query into the exact set of API params the server
+// understands. Scope, free text, advanced rules, match mode and sort are all
+// applied server-side so the page only ever renders what the API returned.
+export function buildPasteQueryParams(query: PasteListQuery): string {
+    const params = new URLSearchParams();
+    params.set('scope', query.scope);
+    const text = query.query.trim();
+    if (text) params.set('filter', text);
+    if (query.filterRules.length > 0) {
+        params.set('filterRules', JSON.stringify(query.filterRules));
+        params.set('matchMode', query.matchMode);
+    }
+    if (query.sort) {
+        params.set('sort', query.sort);
+        params.set('dir', query.dir);
+    }
+    return params.toString();
+}
+
+// Owns the paged paste listing: one request per (query, page) against
+// /api/pastes, with a request guard so a slow response never overwrites a newer
+// page. A query change always restarts from page 1.
+export function usePastes(pageSize: number, query: PasteListQuery): UsePastesResult {
     const [page, setPage] = useState(1);
     const [items, setItems] = useState<Paste[]>([]);
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const requestId = useRef(0);
+
+    const baseQuery = useMemo(() => buildPasteQueryParams(query), [query]);
+    const queryKey = `${pageSize}|${baseQuery}`;
+
+    // Adjusting state during render: when the query changes the current page is
+    // no longer valid, so snap back to page 1 in the same commit and avoid a
+    // wasted request for the stale page.
+    const previousKey = useRef(queryKey);
+    if (previousKey.current !== queryKey) {
+        previousKey.current = queryKey;
+        if (page !== 1) setPage(1);
+    }
 
     const load = useCallback(
         async (targetPage: number, force = false) => {
@@ -34,9 +65,7 @@ export function usePastes(pageSize = 50, scope: PasteScope = 'default'): UsePast
             setError(null);
             try {
                 const forceParam = force ? '&force=1' : '';
-                const response = await fetch(
-                    `/api/pastes?page=${targetPage}&limit=${pageSize}&scope=${scope}${forceParam}`
-                );
+                const response = await fetch(`/api/pastes?page=${targetPage}&limit=${pageSize}&${baseQuery}${forceParam}`);
                 if (!response.ok) throw new Error('Failed to load pastes');
                 const body = (await response.json()) as PagedResponse<Paste>;
                 if (id !== requestId.current) return;
@@ -50,13 +79,8 @@ export function usePastes(pageSize = 50, scope: PasteScope = 'default'): UsePast
                 if (id === requestId.current) setLoading(false);
             }
         },
-        [pageSize, scope]
+        [baseQuery, pageSize]
     );
-
-    // A scope change invalidates the current page: always restart from page 1.
-    useEffect(() => {
-        setPage(1);
-    }, [scope]);
 
     useEffect(() => {
         void load(page);

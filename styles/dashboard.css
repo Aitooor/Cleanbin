@@ -701,6 +701,230 @@
     flex: 1 1 auto;
 }
 
+/* Right-hand cluster (results or selection + the single delete action). Kept
+   together so it wraps as a unit on narrow screens. */
+.dash-toolbar-end {
+    display: flex;
+    align-items: center;
+    gap: var(--dash-space-2);
+    margin-left: auto;
+}
+
+/* Search field with a leading icon. The wrapper owns the flex sizing so the
+   input can fill it edge to edge. */
+.dash-search-wrap {
+    position: relative;
+    flex: 1 1 200px;
+    max-width: 320px;
+    min-width: 0;
+}
+
+.dash-search-wrap .dash-search {
+    width: 100%;
+    flex: 0 0 auto;
+    padding-left: 34px;
+}
+
+.dash-search-icon {
+    position: absolute;
+    left: var(--dash-space-3);
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--dash-text-faint);
+    pointer-events: none;
+}
+
+.dash-results {
+    font-size: var(--dash-fs-sm);
+    color: var(--dash-text-muted);
+    white-space: nowrap;
+}
+
+.dash-selection {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--dash-space-2);
+}
+
+.dash-selection-count {
+    font-size: var(--dash-fs-sm);
+    font-weight: 600;
+    color: var(--dash-text);
+    white-space: nowrap;
+}
+
+/* A discreet danger action: red enough to read as destructive, quiet enough to
+   live in the toolbar without shouting. */
+.dash-btn--danger-ghost {
+    background: transparent;
+    border-color: rgba(229, 72, 77, 0.45);
+    color: #ff9a9d;
+}
+
+.dash-btn--danger-ghost:hover:not(:disabled) {
+    background: var(--dash-danger-soft);
+    border-color: rgba(229, 72, 77, 0.7);
+}
+
+/* ---------- Active filter chips ---------- */
+.dash-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--dash-space-2);
+    margin-bottom: var(--dash-space-4);
+}
+
+.dash-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--dash-space-1);
+    padding: 2px 4px 2px var(--dash-space-3);
+    border: 1px solid var(--dash-border-strong);
+    border-radius: 999px;
+    background: var(--dash-surface-2);
+    color: var(--dash-text-muted);
+    font-size: var(--dash-fs-xs);
+    max-width: 100%;
+}
+
+.dash-chip-x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--dash-text-faint);
+    cursor: pointer;
+    transition: background var(--dash-t-fast) ease, color var(--dash-t-fast) ease;
+}
+
+.dash-chip-x:hover {
+    background: var(--dash-surface-3);
+    color: var(--dash-text);
+}
+
+.dash-chip-clear {
+    padding: 2px var(--dash-space-2);
+    border: none;
+    background: none;
+    color: var(--dash-accent);
+    font-family: inherit;
+    font-size: var(--dash-fs-xs);
+    cursor: pointer;
+}
+
+.dash-chip-clear:hover {
+    text-decoration: underline;
+}
+
+/* ---------- Advanced filters panel ---------- */
+.dash-filter-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--dash-space-3);
+    padding: var(--dash-space-4);
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: var(--dash-radius);
+}
+
+.dash-filter-head {
+    display: flex;
+    align-items: center;
+    gap: var(--dash-space-3);
+    flex-wrap: wrap;
+}
+
+.dash-filter-head .dash-select {
+    width: auto;
+}
+
+.dash-filter-note {
+    flex: 1 1 100%;
+    margin: 0;
+    font-size: var(--dash-fs-xs);
+    color: var(--dash-text-faint);
+}
+
+.dash-filter-empty {
+    margin: 0;
+    font-size: var(--dash-fs-sm);
+    color: var(--dash-text-faint);
+}
+
+.dash-filter-rule {
+    display: flex;
+    align-items: center;
+    gap: var(--dash-space-2);
+    flex-wrap: wrap;
+}
+
+.dash-filter-rule .dash-input,
+.dash-filter-rule .dash-select {
+    width: auto;
+}
+
+.dash-filter-negate {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--dash-space-1);
+}
+
+.dash-filter-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--dash-space-2);
+    flex-wrap: wrap;
+    padding-top: var(--dash-space-3);
+    border-top: 1px solid var(--dash-border);
+}
+
+/* ---------- Delete modal mode tabs ---------- */
+.dash-mode-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--dash-space-1);
+    padding: var(--dash-space-1);
+    margin-bottom: var(--dash-space-3);
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: var(--dash-radius);
+}
+
+.dash-mode-tab {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: var(--dash-space-2) var(--dash-space-3);
+    border: none;
+    border-radius: var(--dash-radius-sm);
+    background: transparent;
+    color: var(--dash-text-muted);
+    font-family: inherit;
+    font-size: var(--dash-fs-sm);
+    cursor: pointer;
+    transition: background var(--dash-t-fast) ease, color var(--dash-t-fast) ease;
+}
+
+.dash-mode-tab:hover:not(:disabled) {
+    background: var(--dash-surface-2);
+    color: var(--dash-text);
+}
+
+.dash-mode-tab--active {
+    background: var(--dash-surface-3);
+    color: #fff;
+}
+
+.dash-mode-tab:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
 .dash-pagination {
     display: flex;
     align-items: center;
@@ -1081,6 +1305,28 @@
 
     .dash-stat-value {
         font-size: var(--dash-fs-xl);
+    }
+
+    /* Stack the toolbar cleanly on phones: search on its own row, controls
+       share the next rows without overflowing the card. */
+    .dash-search-wrap {
+        flex: 1 1 100%;
+        max-width: none;
+    }
+
+    .dash-toolbar .dash-select {
+        flex: 1 1 130px;
+    }
+
+    .dash-toolbar-end {
+        width: 100%;
+        margin-left: 0;
+        justify-content: space-between;
+    }
+
+    .dash-toolbar .dash-results,
+    .dash-toolbar .dash-selection {
+        flex: 1 1 auto;
     }
 }
 

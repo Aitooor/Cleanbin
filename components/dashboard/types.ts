@@ -13,6 +13,36 @@ export type DashboardSession = {
 
 export type PasteScope = 'all' | 'mine' | 'shared' | 'anonymous' | 'default';
 
+export type PasteFilterField = 'any' | 'name' | 'content' | 'id';
+
+export type PasteFilterOp = 'contains' | 'exact' | 'starts' | 'regex';
+
+export type PasteMatchMode = 'AND' | 'OR';
+
+export type PasteSortField = 'createdAt' | 'name' | 'permanent';
+
+export type PasteSortDir = 'asc' | 'desc';
+
+// Server-side filter rule, mirroring the shape accepted by GET /api/pastes
+// (?filterRules=) and DELETE /api/pastes (filterRules).
+export type PasteFilterRule = {
+    field: PasteFilterField;
+    op: PasteFilterOp;
+    value: string;
+    negate: boolean;
+};
+
+// Everything the pastes listing needs to build its request. Kept in one object
+// so the listing, the delete preview and the delete call can share it.
+export type PasteListQuery = {
+    scope: PasteScope;
+    query: string;
+    filterRules: PasteFilterRule[];
+    matchMode: PasteMatchMode;
+    sort: PasteSortField | null;
+    dir: PasteSortDir;
+};
+
 export type Paste = {
     id: string;
     name: string;

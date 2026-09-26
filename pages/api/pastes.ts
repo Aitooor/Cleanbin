@@ -31,6 +31,29 @@ function byCreatedAtDesc(a: any, b: any): number {
   return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
 }
 
+// The main listing has no per-type filter; this exists so the bulk-delete
+// preview can show the exact All / Permanent / Temporary sets it will remove.
+function filterByType(items: any[], type?: string): any[] {
+  if (type === 'permanent') return items.filter(isPermanentPaste);
+  if (type === 'temporary' || type === 'temp') return items.filter((item) => !isPermanentPaste(item));
+  return items;
+}
+
+// Server-side ordering so pagination stays coherent (a client-side sort would
+// only reorder the current page). Defaults to newest first.
+function sortForListing(items: any[], sort?: string, dir?: string): any[] {
+  if (!sort || sort === 'createdAt') {
+    const sorted = [...items].sort(byCreatedAtDesc);
+    return dir === 'asc' ? sorted.reverse() : sorted;
+  }
+  const sorted = [...items].sort((a, b) => {
+    if (sort === 'name') return String(a?.name || '').localeCompare(String(b?.name || ''));
+    if (sort === 'permanent') return (isPermanentPaste(a) ? 1 : 0) - (isPermanentPaste(b) ? 1 : 0);
+    return 0;
+  });
+  return dir === 'asc' ? sorted : sorted.reverse();
+}
+
 // Adds the ownership fields the dashboard needs while keeping the raw paste
 // shape used by the editor/preview.
 function withAccess(item: any, viewer: PasteViewer) {
@@ -88,9 +111,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const force = req.query.force === '1';
       const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
       const limit = Math.min(1000, Math.max(1, parseInt((req.query.limit as string) || '50', 10)));
-      const preview = req.query.preview === '1' || !!req.query.filterRules || !!req.query.filter;
       const idsOnly = req.query.ids_only === '1';
       const matchMode = (req.query.matchMode as string) || 'AND';
+      const filter = (req.query.filter as string) || undefined;
+      const filterField = (req.query.filterField as string) || undefined;
+      const sort = (req.query.sort as string) || undefined;
+      const dir = (req.query.dir as string) === 'asc' ? 'asc' : 'desc';
+      const type = (req.query.type as string) || undefined;
+      const filterRulesRaw = (req.query.filterRules as string) || undefined;
+      let filterRules: any[] | undefined;
+      if (filterRulesRaw) {
+        try {
+          filterRules = JSON.parse(filterRulesRaw);
+        } catch (e) {
+          filterRules = undefined;
+        }
+      }
+      const hasRules = Array.isArray(filterRules) && filterRules.length > 0;
+      // Any query parameter beyond the plain listing forces the permission-aware
+      // scan path; the fast in-memory page cache is only valid for the
+      // unfiltered admin "everything" listing.
+      const hasQuery = !!filter?.trim() || hasRules || !!sort || (!!type && type !== 'all');
       // If client provided a token (Cassandra), bypass cached pages and use DB directly
       const token = (req.query.token as string) || undefined;
       if (token) {
@@ -99,49 +140,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         res.setHeader('Cache-Control', `private, no-store`);
         return res.status(200).json({ total: result.total, page, limit, items: visible, nextPageToken: result.nextPageToken || null });
       }
-      // If preview/filtering requested, perform server-side filtering and pagination
-      if (preview) {
-        // Accept filterRules as JSON string in query or simple filter/filterField
-        const filter = (req.query.filter as string) || undefined;
-        const filterField = (req.query.filterField as string) || undefined;
-        const filterRulesRaw = (req.query.filterRules as string) || undefined;
-        let filterRules: any[] | undefined;
-        if (filterRulesRaw) {
-          try {
-            filterRules = JSON.parse(filterRulesRaw);
-          } catch (e) {
-            filterRules = undefined;
-          }
-        }
-        // Fetch all items (limited to MAX_SCAN to avoid huge memory usage)
-        const MAX_SCAN = Number(process.env.PREVIEW_MAX_SCAN || 10000);
-        const all = await getAllPastes();
-        // Permission filtering happens before the scan cap so a user can never
-        // page past somebody else's pastes.
-        const scoped = selectVisible(all, viewer, scope);
-        const scanned = scoped.slice(0, MAX_SCAN);
-
-        let matchedItems = scanned;
-        if (Array.isArray(filterRules) && filterRules.length > 0) {
-          matchedItems = scanned.filter((item) => matchesRules(filterRules, item, matchMode));
-        } else if (filter && filter.trim()) {
-          matchedItems = scanned.filter((item) => matchesSimpleFilter(item, filter, filterField));
-        }
-        const totalMatched = matchedItems.length;
-        const start = (page - 1) * limit;
-        const pageItems = matchedItems.slice(start, start + limit);
-        // if idsOnly requested, map to minimal representation
-        const items = idsOnly
-          ? pageItems.map((p: any) => ({ id: p.id, name: p.name, permanent: p.permanent, owner: p.owner ?? null, mine: !!viewer && p.owner === normalizeEmail(viewer.email) }))
-          : pageItems.map((item: any) => withAccess(item, viewer));
-        res.setHeader('Cache-Control', 'no-store');
-        return res.status(200).json({ total: totalMatched, page, limit, items, truncated: scoped.length > MAX_SCAN });
-      }
-
       // The fast in-memory page cache only covers the unfiltered "everything"
       // listing an admin sees. Every other scope is permission-filtered, which
       // requires reading the rows to decide what the viewer may see.
-      if (scope === 'all' && viewer?.role === 'admin') {
+      if (!hasQuery && scope === 'all' && viewer?.role === 'admin') {
         const result = await getPage(page, limit, force);
         // Prevent client-side caching so dashboard always fetches fresh data immediately.
         res.setHeader('Cache-Control', 'no-store');
@@ -150,13 +152,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .json({ total: result.total, page, limit, items: result.items.map((item) => withAccess(item, viewer)) });
       }
 
+      // Unified permission-aware listing: scope, type, text/rules and sort are
+      // all applied before pagination so the same request powers the table and
+      // the bulk-delete preview.
+      const MAX_SCAN = Number(process.env.PREVIEW_MAX_SCAN || 10000);
       const all = await getAllPastes();
-      const visible = selectVisible(all, viewer, scope).sort(byCreatedAtDesc);
-      const total = visible.length;
+      // Permission filtering happens before the scan cap so a user can never
+      // page past somebody else's pastes.
+      const scoped = selectVisible(all, viewer, scope);
+      const scanned = scoped.slice(0, MAX_SCAN);
+      let matched = filterByType(scanned, type);
+      if (hasRules) {
+        matched = matched.filter((item: any) => matchesRules(filterRules as any[], item, matchMode));
+      } else if (filter && filter.trim()) {
+        matched = matched.filter((item: any) => matchesSimpleFilter(item, filter, filterField));
+      }
+      matched = sortForListing(matched, sort, dir);
+      const total = matched.length;
       const start = (page - 1) * limit;
-      const items = visible.slice(start, start + limit).map((item) => withAccess(item, viewer));
+      const pageItems = matched.slice(start, start + limit);
+      // if idsOnly requested, map to minimal representation
+      const items = idsOnly
+        ? pageItems.map((p: any) => ({ id: p.id, name: p.name, permanent: p.permanent, owner: p.owner ?? null, mine: !!viewer && p.owner === normalizeEmail(viewer.email) }))
+        : pageItems.map((item: any) => withAccess(item, viewer));
       res.setHeader('Cache-Control', 'no-store');
-      res.status(200).json({ total, page, limit, items });
+      res.status(200).json({ total, page, limit, items, truncated: scoped.length > MAX_SCAN });
     } catch (error) {
       console.error('GET /api/pastes error:', error);
       res.status(500).json({ message: 'Failed to fetch pastes' });
@@ -201,6 +221,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const filterRules: any[] | undefined = Array.isArray(body.filterRules) ? body.filterRules : undefined;
       const matchMode = (body.matchMode || (req.query.matchMode as string) || 'AND').toString();
       const confirmRequested = body.confirm === true || body.confirm === 'true';
+      // The delete must target the same visibility scope the preview showed, so
+      // a filtered "delete" can never reach pastes outside the current view.
+      const scope = resolveScope((body.scope as string) || (req.query.scope as string) || undefined, session);
 
       const hasIds = Array.isArray(ids) && ids.length > 0;
       const hasFilter =
@@ -233,11 +256,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         loadedPastes = all;
 
         const type = (req.query.type as string) || body.type || 'all';
-        let base = all;
+        // Scope first, then type, then the text/rules filter: identical order to
+        // the GET listing, so preview and delete always agree.
+        let base = selectVisible(all, session, scope);
         if (type === 'permanent') {
-          base = all.filter(isPermanentPaste);
+          base = base.filter(isPermanentPaste);
         } else if (type === 'temporary' || type === 'temp') {
-          base = all.filter((paste: any) => !isPermanentPaste(paste));
+          base = base.filter((paste: any) => !isPermanentPaste(paste));
         }
 
         if (filterRules && filterRules.length > 0) {

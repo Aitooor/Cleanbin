@@ -58,7 +58,7 @@ export function StatCard({ label, value, hint, tone = 'default', animationDelay 
     );
 }
 
-type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'warning' | 'permanent' | 'ghost';
+type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'danger-ghost' | 'warning' | 'permanent' | 'ghost';
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
     variant?: ButtonVariant;
