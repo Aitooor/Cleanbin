@@ -1,13 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { serialize } from 'cookie';
 import {
   authenticateCredentials,
-  createSessionToken,
+  createAuthChallenge,
   getSessionFromRequest,
-  SESSION_COOKIE_NAME,
-  SESSION_MAX_AGE_SECONDS,
 } from '../../utils/auth';
 import { getPasskey } from '../../utils/passkeys';
+import { getAccountState } from '../../utils/users';
 
 // Cap the request body size for this route.
 export const config = {
@@ -45,23 +43,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
+      // Invited accounts have no password yet: never verify credentials for them,
+      // just point their owner to the setup link.
+      const account = await getAccountState(email);
+      if (account?.status === 'invited') {
+        return res.status(403).json({
+          message: 'This account is pending activation. Finish the invitation from the setup link.',
+        });
+      }
+
       const auth = await authenticateCredentials(email, password);
       if (!auth) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
 
-      const token = createSessionToken(auth.email, auth.role);
-      res.setHeader(
-        'Set-Cookie',
-        serialize(SESSION_COOKIE_NAME, token, {
-          httpOnly: true,
-          secure: true,
-          sameSite: 'lax',
-          path: '/',
-          maxAge: SESSION_MAX_AGE_SECONDS,
-        })
-      );
-      return res.status(200).json({ message: 'Login successful' });
+      // Password alone never yields a session: it always demands the second
+      // factor. Accounts without 2FA are forced to configure it first.
+      if (account?.totpEnabled) {
+        return res.status(200).json({
+          totpRequired: true,
+          challenge: createAuthChallenge(auth.email, 'totp'),
+        });
+      }
+
+      return res.status(200).json({
+        setupRequired: true,
+        challenge: createAuthChallenge(auth.email, 'setup'),
+      });
     }
 
     res.setHeader('Allow', ['GET', 'POST']);

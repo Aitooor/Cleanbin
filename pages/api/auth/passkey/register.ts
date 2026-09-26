@@ -9,6 +9,7 @@ import {
     toBase64Url,
     type PasskeyRecord,
 } from '../../../../utils/passkeys';
+import { disableTotp, getAccountState } from '../../../../utils/users';
 import { resolveOrigin, resolveRpID } from '../../../../utils/passkeyRequest';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -45,18 +46,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const { credential } = verification.registrationInfo;
+        const accountEmail = process.env.ADMIN_EMAIL || session.email;
         const record: PasskeyRecord = {
             credentialID: credential.id,
             credentialPublicKey: toBase64Url(credential.publicKey),
             counter: credential.counter,
             transports: credential.transports ?? [],
             userID,
-            email: process.env.ADMIN_EMAIL || session.email,
+            email: accountEmail,
             createdAt: new Date().toISOString(),
         };
         await savePasskey(record);
 
-        return res.status(200).json({ verified: true });
+        // Signing in with a passkey replaces both the password and the TOTP code,
+        // so the second factor is removed as well. Report both effects to the UI.
+        const account = await getAccountState(accountEmail);
+        const totpRemoved = !!account?.totpEnabled;
+        if (totpRemoved) {
+            await disableTotp(accountEmail);
+        }
+
+        return res.status(200).json({ verified: true, passwordLoginDisabled: true, totpRemoved });
     } catch (error) {
         console.error('POST /api/auth/passkey/register error:', error);
         return res.status(400).json({ message: 'Passkey registration failed' });

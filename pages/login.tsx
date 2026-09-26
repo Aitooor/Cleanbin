@@ -8,6 +8,8 @@ const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passkeyRegistered, setPasskeyRegistered] = useState<boolean | null>(null);
+  const [totpChallenge, setTotpChallenge] = useState<string | null>(null);
+  const [totpCode, setTotpCode] = useState('');
   const router = useRouter();
   const { addNotification } = useNotification();
 
@@ -37,10 +39,41 @@ const Login = () => {
     });
 
     if (response.ok) {
+      const data = await response.json().catch(() => ({}));
+      if (data.totpRequired && typeof data.challenge === 'string') {
+        setTotpChallenge(data.challenge);
+        return;
+      }
+      if (data.setupRequired && typeof data.challenge === 'string') {
+        router.push(`/setup?challenge=${encodeURIComponent(data.challenge)}`);
+        return;
+      }
       router.push('/dashboard');
     } else {
       const data = await response.json();
       addNotification(data.message || 'Invalid credentials');
+    }
+  };
+
+  const handleVerifyTotp = async () => {
+    if (!totpChallenge) return;
+    const code = totpCode.trim();
+    if (!/^\d{6}$/.test(code)) {
+      addNotification('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+
+    const response = await fetch('/api/auth/2fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ challenge: totpChallenge, code }),
+    });
+
+    if (response.ok) {
+      router.push('/dashboard');
+    } else {
+      const data = await response.json().catch(() => ({}));
+      addNotification(data.message || 'Invalid verification code');
     }
   };
 
@@ -73,7 +106,11 @@ const Login = () => {
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter') {
-      handleLogin();
+      if (totpChallenge) {
+        handleVerifyTotp();
+      } else {
+        handleLogin();
+      }
     }
   };
 
@@ -101,49 +138,89 @@ const Login = () => {
         }}
       >
         <h1 style={{ margin: '0 0 4px', fontSize: 20, color: '#e0e0e0' }}>Cleanbin</h1>
-        <p style={{ margin: '0 0 18px', fontSize: 12, color: '#777', lineHeight: 1.5 }}>
-          Sign in to create permanent pastes.
-        </p>
-        <input
-          type="email"
-          placeholder="Enter email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={{ marginBottom: 10 }}
-        />
-        <input
-          type="password"
-          placeholder="Enter password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{ marginBottom: 16 }}
-        />
-        <button onClick={handleLogin} style={{ width: '100%', fontWeight: 600 }}>
-          Login
-        </button>
-        {passkeyRegistered && (
+        {totpChallenge ? (
           <>
-            <p style={{ margin: '18px 0 10px', fontSize: 11, color: '#666', textAlign: 'center' }}>
-              or
+            <p style={{ margin: '0 0 18px', fontSize: 12, color: '#777', lineHeight: 1.5 }}>
+              Enter the 6-digit code from your authenticator app.
             </p>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              placeholder="123456"
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
+              style={{ marginBottom: 16, letterSpacing: 4, textAlign: 'center' }}
+            />
+            <button onClick={handleVerifyTotp} style={{ width: '100%', fontWeight: 600 }}>
+              Verify
+            </button>
             <button
-              onClick={handlePasskeyLogin}
+              onClick={() => {
+                setTotpChallenge(null);
+                setTotpCode('');
+              }}
               className="login-secondary-button"
               style={{
                 width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
+                marginTop: 10,
                 background: '#1e1e1e',
                 color: '#e0e0e0',
                 border: '1px solid #333',
                 fontWeight: 600,
               }}
             >
-              <FiKey size={16} />
-              Sign in with passkey
+              Back
             </button>
+          </>
+        ) : (
+          <>
+            <p style={{ margin: '0 0 18px', fontSize: 12, color: '#777', lineHeight: 1.5 }}>
+              Sign in to create permanent pastes.
+            </p>
+            <input
+              type="email"
+              placeholder="Enter email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              style={{ marginBottom: 10 }}
+            />
+            <input
+              type="password"
+              placeholder="Enter password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{ marginBottom: 16 }}
+            />
+            <button onClick={handleLogin} style={{ width: '100%', fontWeight: 600 }}>
+              Login
+            </button>
+            {passkeyRegistered && (
+              <>
+                <p style={{ margin: '18px 0 10px', fontSize: 11, color: '#666', textAlign: 'center' }}>
+                  or
+                </p>
+                <button
+                  onClick={handlePasskeyLogin}
+                  className="login-secondary-button"
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    background: '#1e1e1e',
+                    color: '#e0e0e0',
+                    border: '1px solid #333',
+                    fontWeight: 600,
+                  }}
+                >
+                  <FiKey size={16} />
+                  Sign in with passkey
+                </button>
+              </>
+            )}
           </>
         )}
       </div>

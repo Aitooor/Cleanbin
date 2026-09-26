@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { parse as parseCookies } from 'cookie';
+import { parse as parseCookies, serialize } from 'cookie';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { verifyUserCredentials, type UserRole } from './users';
 
@@ -40,21 +40,14 @@ function getAuthSecret(): string {
     return secret;
 }
 
-export function createSessionToken(email: string, role: SessionRole = 'admin'): string {
+// Signs an already base64url-encoded payload with HMAC-SHA256(AUTH_SECRET).
+function signEncodedPayload(encodedPayload: string): string {
     const secret = getAuthSecret();
-    const payload: SessionPayload = {
-        email,
-        role,
-        exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
-    };
-    const encodedPayload = toBase64Url(JSON.stringify(payload));
-    const signature = toBase64Url(
-        crypto.createHmac('sha256', secret).update(encodedPayload).digest()
-    );
-    return `${encodedPayload}.${signature}`;
+    return toBase64Url(crypto.createHmac('sha256', secret).update(encodedPayload).digest());
 }
 
-export function verifySessionToken(token: string | undefined | null): SessionPayload | null {
+// Returns the encoded payload only when the signature is valid, or null.
+function verifySignedPayload(token: string | undefined | null): string | null {
     if (!token) return null;
 
     let secret: string;
@@ -78,6 +71,22 @@ export function verifySessionToken(token: string | undefined | null): SessionPay
     }
     if (provided.length !== expected.length) return null;
     if (!crypto.timingSafeEqual(provided, expected)) return null;
+    return encodedPayload;
+}
+
+export function createSessionToken(email: string, role: SessionRole = 'admin'): string {
+    const payload: SessionPayload = {
+        email,
+        role,
+        exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
+    };
+    const encodedPayload = toBase64Url(JSON.stringify(payload));
+    return `${encodedPayload}.${signEncodedPayload(encodedPayload)}`;
+}
+
+export function verifySessionToken(token: string | undefined | null): SessionPayload | null {
+    const encodedPayload = verifySignedPayload(token);
+    if (!encodedPayload) return null;
 
     let payload: SessionPayload;
     try {
@@ -88,6 +97,64 @@ export function verifySessionToken(token: string | undefined | null): SessionPay
     if (!payload || typeof payload.exp !== 'number') return null;
     if (payload.exp < Math.floor(Date.now() / 1000)) return null;
     return payload;
+}
+
+// Short-lived signed challenge issued after password verification. It never
+// grants a session by itself: the holder must still prove possession of the
+// second factor (TOTP code) to exchange it for a cookie.
+const AUTH_CHALLENGE_TTL_SECONDS = 5 * 60;
+
+export type AuthChallengePurpose = 'totp' | 'setup';
+
+export interface AuthChallengePayload {
+    email: string;
+    purpose: AuthChallengePurpose;
+    exp: number;
+}
+
+export function createAuthChallenge(email: string, purpose: AuthChallengePurpose): string {
+    const payload: AuthChallengePayload = {
+        email,
+        purpose,
+        exp: Math.floor(Date.now() / 1000) + AUTH_CHALLENGE_TTL_SECONDS,
+    };
+    const encodedPayload = toBase64Url(JSON.stringify(payload));
+    return `${encodedPayload}.${signEncodedPayload(encodedPayload)}`;
+}
+
+export function verifyAuthChallenge(
+    token: string | undefined | null,
+    purpose?: AuthChallengePurpose
+): AuthChallengePayload | null {
+    const encodedPayload = verifySignedPayload(token);
+    if (!encodedPayload) return null;
+
+    let payload: AuthChallengePayload;
+    try {
+        payload = JSON.parse(fromBase64Url(encodedPayload).toString('utf-8'));
+    } catch {
+        return null;
+    }
+    if (!payload || typeof payload.email !== 'string' || typeof payload.exp !== 'number') return null;
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+    if (purpose && payload.purpose !== purpose) return null;
+    return payload;
+}
+
+// Issues the signed session cookie. Shared by every successful login path so
+// cookie flags stay consistent in one place.
+export function setSessionCookie(res: NextApiResponse, email: string, role: SessionRole): void {
+    const token = createSessionToken(email, role);
+    res.setHeader(
+        'Set-Cookie',
+        serialize(SESSION_COOKIE_NAME, token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'lax',
+            path: '/',
+            maxAge: SESSION_MAX_AGE_SECONDS,
+        })
+    );
 }
 
 export function getSessionFromRequest(req: NextApiRequest): SessionPayload | null {

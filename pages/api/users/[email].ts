@@ -3,6 +3,8 @@ import { requireAdmin } from '../../../utils/auth';
 import {
     deleteUser,
     updateUser,
+    issueInviteToken,
+    disableTotp,
     ImmutableUserError,
     PASSWORD_MIN_LENGTH,
     UserNotFoundError,
@@ -10,6 +12,9 @@ import {
     type UpdateUserPatch,
     type UserRole,
 } from '../../../utils/users';
+import { resolveOrigin } from '../../../utils/passkeyRequest';
+import { buildSetupUrl } from '../../../utils/invites';
+import { sendInvitationEmail } from '../../../utils/mailer';
 
 // Cap the request body size for this route.
 export const config = {
@@ -59,7 +64,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
         if (req.method === 'PATCH') {
-            const { role, permanentDeleteLimit, password } = req.body || {};
+            const { action, role, permanentDeleteLimit, password } = req.body || {};
+
+            if (action === 'resend-invite') {
+                try {
+                    const inviteToken = await issueInviteToken(email);
+                    const url = buildSetupUrl(inviteToken, resolveOrigin(req));
+                    const delivery = await sendInvitationEmail(email, url);
+                    // Same fallback as creation: the link is exposed only when
+                    // email delivery is unavailable.
+                    return res.status(200).json({
+                        emailSent: delivery.sent,
+                        ...(delivery.sent ? {} : { setupUrl: url }),
+                    });
+                } catch (error) {
+                    if (sendUserError(res, error)) return;
+                    throw error;
+                }
+            }
+
+            if (action === 'reset-2fa') {
+                try {
+                    await disableTotp(email);
+                    return res.status(200).json({ message: 'Two-factor authentication reset' });
+                } catch (error) {
+                    if (sendUserError(res, error)) return;
+                    throw error;
+                }
+            }
+
             const patch: UpdateUserPatch = {};
 
             if (role !== undefined) {

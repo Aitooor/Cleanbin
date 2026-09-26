@@ -3,20 +3,33 @@ import path from 'path';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { DATA_DIR } from './config';
+import { generateInviteToken, hashInviteToken } from './invites';
+import { generateTotpSecret, verifyTotp } from './totp';
 
 const USERS_FILE_PATH = path.join(DATA_DIR, 'users.json');
 const LEGACY_ADMINS_FILE_PATH = path.join(DATA_DIR, 'admins.json');
 const BCRYPT_ROUNDS = 10;
 export const PASSWORD_MIN_LENGTH = 8;
+// Passwords chosen through the invitation/setup flow must be stronger than the
+// legacy admin-provided minimum.
+export const SETUP_PASSWORD_MIN_LENGTH = 10;
 
 export type UserRole = 'admin' | 'user';
+export type UserStatus = 'invited' | 'active';
 
 export interface User {
     email: string;
+    // Empty until the invitation is completed.
     passwordHash: string;
     role: UserRole;
     permanentDeleteLimit: number;
     createdAt: string;
+    status: UserStatus;
+    totpSecret: string | null;
+    totpEnabledAt: string | null;
+    // Only the SHA-256 hash of the single-use invitation token is stored.
+    inviteTokenHash: string | null;
+    inviteExpiresAt: string | null;
 }
 
 // Never leave the process with the password hash attached to a public shape.
@@ -25,15 +38,25 @@ export interface PublicUser {
     role: UserRole;
     permanentDeleteLimit: number;
     createdAt: string;
+    status: UserStatus;
+    totpEnabled: boolean;
+    invitePending: boolean;
     // The environment administrator lives in env vars, not in users.json.
     immutable?: boolean;
 }
 
 export interface CreateUserInput {
     email: string;
-    password: string;
+    // When omitted the account is created as an invitation to be completed.
+    password?: string;
     role: UserRole;
     permanentDeleteLimit: number;
+}
+
+export interface CreateUserResult {
+    user: PublicUser;
+    // Present only for invitations; only the caller may send it by email.
+    inviteToken: string | null;
 }
 
 export interface UpdateUserPatch {
@@ -45,6 +68,14 @@ export interface UpdateUserPatch {
 export interface AuthenticatedUser {
     email: string;
     role: UserRole;
+}
+
+export interface AccountAuthState {
+    email: string;
+    role: UserRole;
+    status: UserStatus;
+    totpEnabled: boolean;
+    invitePending: boolean;
 }
 
 export class UserValidationError extends Error {}
@@ -84,12 +115,18 @@ async function writeFileAtomic(filePath: string, contents: string): Promise<void
     await fs.rename(tmpPath, filePath);
 }
 
+function optionalString(value: unknown): string | null {
+    return typeof value === 'string' && value ? value : null;
+}
+
 function normalizeStoredUser(entry: unknown): User | null {
     if (!entry || typeof entry !== 'object') return null;
     const record = entry as Record<string, unknown>;
     const email = typeof record.email === 'string' ? normalizeEmail(record.email) : '';
+    if (!email) return null;
+    // Records created before invitations always had a password hash; invited
+    // records intentionally have none until the setup flow completes.
     const passwordHash = typeof record.passwordHash === 'string' ? record.passwordHash : '';
-    if (!email || !passwordHash) return null;
 
     const role: UserRole = record.role === 'admin' ? 'admin' : 'user';
     const rawLimit = Number(record.permanentDeleteLimit);
@@ -97,8 +134,20 @@ function normalizeStoredUser(entry: unknown): User | null {
         Number.isInteger(rawLimit) && rawLimit >= 0 ? rawLimit : 0;
     const createdAt =
         typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString();
+    const status: UserStatus = record.status === 'invited' ? 'invited' : 'active';
 
-    return { email, passwordHash, role, permanentDeleteLimit, createdAt };
+    return {
+        email,
+        passwordHash,
+        role,
+        permanentDeleteLimit,
+        createdAt,
+        status,
+        totpSecret: optionalString(record.totpSecret),
+        totpEnabledAt: optionalString(record.totpEnabledAt),
+        inviteTokenHash: optionalString(record.inviteTokenHash),
+        inviteExpiresAt: optionalString(record.inviteExpiresAt),
+    };
 }
 
 // Returns null when the file does not exist yet, so callers can run the legacy
@@ -166,6 +215,11 @@ async function migrateLegacyAdmins(): Promise<User[]> {
             role: 'admin',
             permanentDeleteLimit: 0,
             createdAt: new Date().toISOString(),
+            status: 'active',
+            totpSecret: null,
+            totpEnabledAt: null,
+            inviteTokenHash: null,
+            inviteExpiresAt: null,
         });
     }
     return users;
@@ -186,26 +240,42 @@ function toPublicUser(user: User): PublicUser {
         role: user.role,
         permanentDeleteLimit: user.permanentDeleteLimit,
         createdAt: user.createdAt,
+        status: user.status,
+        totpEnabled: !!user.totpEnabledAt,
+        invitePending: user.status === 'invited',
     };
 }
 
-function envAdminPublicUser(): PublicUser {
+function envAdminPublicUser(totpEnabled: boolean): PublicUser {
     return {
         email: process.env.ADMIN_EMAIL?.trim() || '',
         role: 'admin',
         permanentDeleteLimit: 0,
         createdAt: new Date(0).toISOString(),
+        status: 'active',
+        totpEnabled,
+        invitePending: false,
         immutable: true,
     };
 }
 
+function findStoredUser(users: User[], email: string): User | undefined {
+    return users.find((candidate) => candidate.email === normalizeEmail(email));
+}
+
 export async function listUsers(): Promise<PublicUser[]> {
     const users = await loadStoredUsers();
-    const stored = users.map(toPublicUser);
-
     const envEmail = process.env.ADMIN_EMAIL?.trim();
-    if (envEmail && !users.some((user) => sameEmail(user.email, envEmail))) {
-        stored.unshift(envAdminPublicUser());
+    const envRecord = envEmail ? users.find((user) => sameEmail(user.email, envEmail)) : undefined;
+
+    // The environment admin is always rendered from env data (immutable role and
+    // limits); only its 2FA state is read from the optional stored record.
+    const stored = users
+        .filter((user) => !(envEmail && sameEmail(user.email, envEmail)))
+        .map(toPublicUser);
+
+    if (envEmail) {
+        stored.unshift(envAdminPublicUser(!!envRecord?.totpEnabledAt));
     }
     return stored;
 }
@@ -213,14 +283,17 @@ export async function listUsers(): Promise<PublicUser[]> {
 export async function getUser(email: string): Promise<PublicUser | null> {
     const normalized = normalizeEmail(email);
     const users = await loadStoredUsers();
-    const user = users.find((candidate) => candidate.email === normalized);
-    if (user) return toPublicUser(user);
 
-    if (isEnvAdmin(normalized)) return envAdminPublicUser();
-    return null;
+    if (isEnvAdmin(normalized)) {
+        const record = findStoredUser(users, normalized);
+        return envAdminPublicUser(!!record?.totpEnabledAt);
+    }
+
+    const user = findStoredUser(users, normalized);
+    return user ? toPublicUser(user) : null;
 }
 
-export async function createUser(input: CreateUserInput): Promise<PublicUser> {
+export async function createUser(input: CreateUserInput): Promise<CreateUserResult> {
     const email = normalizeEmail(input.email);
     if (!email) throw new UserValidationError('Email is required');
     if (isEnvAdmin(email)) throw new UserExistsError('This email is reserved');
@@ -230,7 +303,9 @@ export async function createUser(input: CreateUserInput): Promise<PublicUser> {
     if (!Number.isInteger(input.permanentDeleteLimit) || input.permanentDeleteLimit < 0) {
         throw new UserValidationError('permanentDeleteLimit must be an integer greater than or equal to 0');
     }
-    if (typeof input.password !== 'string' || input.password.length < PASSWORD_MIN_LENGTH) {
+
+    const hasPassword = typeof input.password === 'string' && input.password.length > 0;
+    if (hasPassword && (input.password as string).length < PASSWORD_MIN_LENGTH) {
         throw new UserValidationError(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
     }
 
@@ -239,17 +314,22 @@ export async function createUser(input: CreateUserInput): Promise<PublicUser> {
         throw new UserExistsError('A user with this email already exists');
     }
 
-    const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
+    const invite = hasPassword ? null : generateInviteToken();
     const user: User = {
         email,
-        passwordHash,
+        passwordHash: hasPassword ? await bcrypt.hash(input.password as string, BCRYPT_ROUNDS) : '',
         role: input.role,
         permanentDeleteLimit: input.permanentDeleteLimit,
         createdAt: new Date().toISOString(),
+        status: hasPassword ? 'active' : 'invited',
+        totpSecret: null,
+        totpEnabledAt: null,
+        inviteTokenHash: invite ? invite.hash : null,
+        inviteExpiresAt: invite ? invite.expiresAt : null,
     };
     users.push(user);
     await saveUsers(users);
-    return toPublicUser(user);
+    return { user: toPublicUser(user), inviteToken: invite ? invite.token : null };
 }
 
 export async function updateUser(email: string, patch: UpdateUserPatch): Promise<PublicUser> {
@@ -259,7 +339,7 @@ export async function updateUser(email: string, patch: UpdateUserPatch): Promise
     }
 
     const users = await loadStoredUsers();
-    const user = users.find((candidate) => candidate.email === normalized);
+    const user = findStoredUser(users, normalized);
     if (!user) throw new UserNotFoundError('User not found');
 
     if (patch.role !== undefined) {
@@ -279,6 +359,10 @@ export async function updateUser(email: string, patch: UpdateUserPatch): Promise
             throw new UserValidationError(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
         }
         user.passwordHash = await bcrypt.hash(patch.password, BCRYPT_ROUNDS);
+        // An admin-set password activates the account and invalidates any invite.
+        user.status = 'active';
+        user.inviteTokenHash = null;
+        user.inviteExpiresAt = null;
     }
 
     await saveUsers(users);
@@ -309,8 +393,8 @@ export async function verifyUserCredentials(
     }
 
     const users = await loadStoredUsers();
-    const user = users.find((candidate) => candidate.email === normalizeEmail(email));
-    if (!user) return null;
+    const user = findStoredUser(users, email);
+    if (!user || !user.passwordHash) return null;
 
     let valid = false;
     try {
@@ -328,8 +412,167 @@ export async function getPermanentDeleteLimit(email: string): Promise<number> {
     if (isEnvAdmin(email)) return Number.POSITIVE_INFINITY;
 
     const users = await loadStoredUsers();
-    const user = users.find((candidate) => candidate.email === normalizeEmail(email));
+    const user = findStoredUser(users, email);
     if (!user) return 0;
     if (user.role === 'admin') return Number.POSITIVE_INFINITY;
     return user.permanentDeleteLimit;
+}
+
+export async function getAccountState(email: string): Promise<AccountAuthState | null> {
+    const normalized = normalizeEmail(email);
+    const users = await loadStoredUsers();
+
+    if (isEnvAdmin(normalized)) {
+        const record = findStoredUser(users, normalized);
+        return {
+            email: normalized,
+            role: 'admin',
+            status: 'active',
+            totpEnabled: !!record?.totpEnabledAt,
+            invitePending: false,
+        };
+    }
+
+    const user = findStoredUser(users, normalized);
+    if (!user) return null;
+    return {
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        totpEnabled: !!user.totpEnabledAt,
+        invitePending: user.status === 'invited',
+    };
+}
+
+// Resolves a plain invitation token to its owner. Tokens travel only by email or
+// a manual link; the stored value is always the SHA-256 hash.
+export async function resolveInviteEmail(token: string): Promise<string | null> {
+    if (!token) return null;
+    const hash = hashInviteToken(token);
+    const users = await loadStoredUsers();
+    const user = users.find(
+        (candidate) => candidate.inviteTokenHash && safeEqualStrings(candidate.inviteTokenHash, hash)
+    );
+    if (!user || !user.inviteExpiresAt) return null;
+    if (new Date(user.inviteExpiresAt).getTime() < Date.now()) return null;
+    return user.email;
+}
+
+// Step 1 of the setup flow: the invitee chooses their own password.
+export async function setUserPassword(email: string, password: string): Promise<void> {
+    if (typeof password !== 'string' || password.length < SETUP_PASSWORD_MIN_LENGTH) {
+        throw new UserValidationError(
+            `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters`
+        );
+    }
+
+    const users = await loadStoredUsers();
+    const user = findStoredUser(users, email);
+    if (!user) throw new UserNotFoundError('User not found');
+
+    user.passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    await saveUsers(users);
+}
+
+// Issues a fresh single-use token for a still-pending invitation.
+export async function issueInviteToken(email: string): Promise<string> {
+    const normalized = normalizeEmail(email);
+    if (isEnvAdmin(normalized)) {
+        throw new ImmutableUserError('The environment administrator cannot be invited');
+    }
+
+    const users = await loadStoredUsers();
+    const user = findStoredUser(users, normalized);
+    if (!user) throw new UserNotFoundError('User not found');
+    if (user.status !== 'invited') {
+        throw new UserValidationError('Only pending invitations can be resent');
+    }
+
+    const invite = generateInviteToken();
+    user.inviteTokenHash = invite.hash;
+    user.inviteExpiresAt = invite.expiresAt;
+    await saveUsers(users);
+    return invite.token;
+}
+
+// The environment admin is not stored in users.json; create a minimal record on
+// demand so its TOTP fields have somewhere durable to live. Such a record keeps
+// an empty password (login still comes from ADMIN_PASSWORD).
+function getOrCreateMutableRecord(users: User[], email: string): User | null {
+    const existing = findStoredUser(users, email);
+    if (existing) return existing;
+    if (!isEnvAdmin(email)) return null;
+
+    const record: User = {
+        email: normalizeEmail(email),
+        passwordHash: '',
+        role: 'admin',
+        permanentDeleteLimit: 0,
+        createdAt: new Date().toISOString(),
+        status: 'active',
+        totpSecret: null,
+        totpEnabledAt: null,
+        inviteTokenHash: null,
+        inviteExpiresAt: null,
+    };
+    users.push(record);
+    return record;
+}
+
+// Step 2 of the setup flow: generate a pending secret. It is not active until a
+// valid code is verified, so a leaked secret alone cannot bypass login.
+export async function startTotpSetup(email: string): Promise<string> {
+    const users = await loadStoredUsers();
+    const user = getOrCreateMutableRecord(users, email);
+    if (!user) throw new UserNotFoundError('User not found');
+
+    const secret = generateTotpSecret();
+    user.totpSecret = secret;
+    user.totpEnabledAt = null;
+    await saveUsers(users);
+    return secret;
+}
+
+// Verifies the code against the pending secret and activates 2FA. Completing the
+// setup also activates the account and burns the invitation token.
+export async function enableTotp(email: string, code: string): Promise<AccountAuthState | null> {
+    const users = await loadStoredUsers();
+    const user = findStoredUser(users, email);
+    if (!user || !user.totpSecret) return null;
+    if (!verifyTotp(user.totpSecret, code)) return null;
+
+    user.totpEnabledAt = new Date().toISOString();
+    user.status = 'active';
+    user.inviteTokenHash = null;
+    user.inviteExpiresAt = null;
+    await saveUsers(users);
+
+    return {
+        email: user.email,
+        role: user.role,
+        status: 'active',
+        totpEnabled: true,
+        invitePending: false,
+    };
+}
+
+export async function disableTotp(email: string): Promise<void> {
+    const normalized = normalizeEmail(email);
+    const users = await loadStoredUsers();
+    const user = findStoredUser(users, normalized);
+    if (!user) {
+        if (isEnvAdmin(normalized)) return; // nothing configured yet
+        throw new UserNotFoundError('User not found');
+    }
+
+    user.totpSecret = null;
+    user.totpEnabledAt = null;
+    await saveUsers(users);
+}
+
+export async function getEnabledTotpSecret(email: string): Promise<string | null> {
+    const users = await loadStoredUsers();
+    const user = findStoredUser(users, email);
+    if (!user || !user.totpEnabledAt || !user.totpSecret) return null;
+    return user.totpSecret;
 }

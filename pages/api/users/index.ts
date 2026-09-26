@@ -3,11 +3,14 @@ import { requireAdmin } from '../../../utils/auth';
 import {
     createUser,
     listUsers,
-    PASSWORD_MIN_LENGTH,
     UserExistsError,
     UserValidationError,
     type UserRole,
 } from '../../../utils/users';
+import { getPasskey } from '../../../utils/passkeys';
+import { resolveOrigin } from '../../../utils/passkeyRequest';
+import { buildSetupUrl } from '../../../utils/invites';
+import { sendInvitationEmail } from '../../../utils/mailer';
 
 // Cap the request body size for this route.
 export const config = {
@@ -34,19 +37,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
         if (req.method === 'GET') {
-            return res.status(200).json(await listUsers());
+            const users = await listUsers();
+            const passkey = await getPasskey();
+            const withPasskey = users.map((user) => ({
+                ...user,
+                hasPasskey: !!passkey && passkey.email === user.email,
+            }));
+            return res.status(200).json(withPasskey);
         }
 
         if (req.method === 'POST') {
-            const { email, password, role, permanentDeleteLimit } = req.body || {};
+            const { email, role, permanentDeleteLimit } = req.body || {};
 
             if (typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
                 return res.status(400).json({ message: 'A valid email is required' });
-            }
-            if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
-                return res
-                    .status(400)
-                    .json({ message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters` });
             }
             const parsedRole = parseRole(role);
             if (!parsedRole) {
@@ -60,13 +64,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
 
             try {
-                const created = await createUser({
+                // Accounts are created as invitations: no password is set here.
+                const { user, inviteToken } = await createUser({
                     email,
-                    password,
                     role: parsedRole,
                     permanentDeleteLimit: parsedLimit,
                 });
-                return res.status(201).json(created);
+
+                let emailSent = false;
+                let setupUrl: string | undefined;
+                if (inviteToken) {
+                    const url = buildSetupUrl(inviteToken, resolveOrigin(req));
+                    const delivery = await sendInvitationEmail(user.email, url);
+                    emailSent = delivery.sent;
+                    // setupUrl is only returned when email delivery fails, so the
+                    // admin can hand the link over out of band. It is never sent
+                    // on the happy path, where the token lives only in the email.
+                    if (!delivery.sent) setupUrl = url;
+                }
+
+                return res.status(201).json({
+                    ...user,
+                    emailSent,
+                    ...(setupUrl ? { setupUrl } : {}),
+                });
             } catch (error) {
                 if (error instanceof UserExistsError) {
                     return res.status(409).json({ message: error.message });

@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useNotification } from '../components/NotificationProvider';
 import { FaTrash, FaClipboard, FaEye, FaClone, FaPen } from 'react-icons/fa';
-import { FiLogOut, FiKey, FiTrash2, FiUserPlus } from 'react-icons/fi';
+import { FiLogOut, FiKey, FiTrash2, FiUserPlus, FiRefreshCw, FiShield } from 'react-icons/fi';
 import { startRegistration } from '@simplewebauthn/browser';
 import type { GetServerSideProps } from 'next';
 import { parse } from 'cookie';
@@ -31,7 +31,6 @@ type DashboardProps = {
 
 type UserFormState = {
     email: string;
-    password: string;
     role: 'admin' | 'user';
     permanentDeleteLimit: string;
 };
@@ -41,12 +40,15 @@ type DashboardUser = {
     role: 'admin' | 'user';
     permanentDeleteLimit: number;
     createdAt: string;
+    status: 'invited' | 'active';
+    totpEnabled: boolean;
+    invitePending: boolean;
+    hasPasskey: boolean;
     immutable?: boolean;
 };
 
 const EMPTY_USER_FORM: UserFormState = {
     email: '',
-    password: '',
     role: 'user',
     permanentDeleteLimit: '2',
 };
@@ -119,6 +121,7 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
     const [userForm, setUserForm] = useState<UserFormState>(EMPTY_USER_FORM);
     const [editingEmail, setEditingEmail] = useState<string | null>(null);
     const [userBusy, setUserBusy] = useState(false);
+    const [setupUrl, setSetupUrl] = useState<string | null>(null);
 
     const showTooltip = (e: any, text: string, center = false) => {
         if (center) {
@@ -158,6 +161,16 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
 
     const handleRegisterPasskey = async () => {
         if (passkeyBusy) return;
+        // A passkey replaces both factors, so warn about both effects before touching anything.
+        const confirmed =
+            typeof window === 'undefined' ||
+            window.confirm(
+                'Registering a passkey will:\n\n' +
+                    '1. Disable password sign in for this account.\n' +
+                    '2. Remove your 2FA (TOTP) if you have it enabled.\n\n' +
+                    'You will sign in with the passkey from now on. Continue?'
+            );
+        if (!confirmed) return;
         try {
             setPasskeyBusy(true);
             const optionsResponse = await fetch('/api/auth/passkey/register-options', { method: 'POST' });
@@ -174,8 +187,13 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
                 body: JSON.stringify({ response: registrationResponse }),
             });
             if (verifyResponse.ok) {
+                const data = await verifyResponse.json().catch(() => ({}));
                 setPasskeyRegistered(true);
-                addNotification('Passkey registered. Password login is now disabled.');
+                addNotification(
+                    data?.totpRemoved
+                        ? 'Passkey registered. Password sign in disabled and 2FA removed.'
+                        : 'Passkey registered. Password sign in is now disabled.'
+                );
             } else {
                 const data = await verifyResponse.json();
                 addNotification(data.message || 'Passkey registration failed');
@@ -229,9 +247,9 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
 
     const handleEditUser = (user: DashboardUser) => {
         setEditingEmail(user.email);
+        setSetupUrl(null);
         setUserForm({
             email: user.email,
-            password: '',
             role: user.role,
             permanentDeleteLimit: String(user.permanentDeleteLimit),
         });
@@ -250,16 +268,7 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
             addNotification('Limit must be an integer greater than or equal to 0.');
             return;
         }
-        const passwordRequired = !editingEmail;
-        if (passwordRequired && userForm.password.length < 8) {
-            addNotification('Password must be at least 8 characters.');
-            return;
-        }
-        if (!passwordRequired && userForm.password && userForm.password.length < 8) {
-            addNotification('Password must be at least 8 characters.');
-            return;
-        }
-        if (passwordRequired && !/\S+@\S+\.\S+/.test(userForm.email.trim())) {
+        if (!editingEmail && !/\S+@\S+\.\S+/.test(userForm.email.trim())) {
             addNotification('Please enter a valid email.');
             return;
         }
@@ -267,16 +276,13 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
         setUserBusy(true);
         try {
             if (editingEmail) {
-                const patch: Record<string, unknown> = {
-                    role: userForm.role,
-                    permanentDeleteLimit: limit,
-                };
-                if (userForm.password) patch.password = userForm.password;
-
                 const response = await fetch(`/api/users/${encodeURIComponent(editingEmail)}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(patch),
+                    body: JSON.stringify({
+                        role: userForm.role,
+                        permanentDeleteLimit: limit,
+                    }),
                 });
                 if (response.ok) {
                     addNotification('User updated.');
@@ -292,19 +298,83 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         email: userForm.email.trim(),
-                        password: userForm.password,
                         role: userForm.role,
                         permanentDeleteLimit: limit,
                     }),
                 });
                 if (response.status === 201) {
-                    addNotification('User created.');
+                    const data = await response.json().catch(() => ({}));
                     setUserForm(EMPTY_USER_FORM);
+                    // setupUrl is only present when the invitation email could
+                    // not be delivered, so the admin can share it manually.
+                    if (data.setupUrl) {
+                        setSetupUrl(data.setupUrl);
+                        addNotification('Invitation created, but the email could not be sent. Copy the setup link.');
+                    } else {
+                        setSetupUrl(null);
+                        addNotification('Invitation sent.');
+                    }
                     await fetchUsers();
                 } else {
                     const data = await response.json();
                     addNotification(data.message || 'Failed to create user.');
                 }
+            }
+        } catch {
+            addNotification('Request failed.');
+        } finally {
+            setUserBusy(false);
+        }
+    };
+
+    const handleResendInvite = async (user: DashboardUser) => {
+        if (userBusy) return;
+        setUserBusy(true);
+        try {
+            const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'resend-invite' }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (response.ok) {
+                if (data.setupUrl) {
+                    setSetupUrl(data.setupUrl);
+                    addNotification('Invitation renewed, but the email could not be sent. Copy the setup link.');
+                } else {
+                    setSetupUrl(null);
+                    addNotification('Invitation sent.');
+                }
+            } else {
+                addNotification(data.message || 'Failed to resend the invitation.');
+            }
+        } catch {
+            addNotification('Request failed.');
+        } finally {
+            setUserBusy(false);
+        }
+    };
+
+    const handleResetTotp = async (user: DashboardUser) => {
+        if (userBusy) return;
+        const confirmed = window.confirm(
+            `Reset two-factor authentication for ${user.email}? They will have to set it up again on the next login.`
+        );
+        if (!confirmed) return;
+
+        setUserBusy(true);
+        try {
+            const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'reset-2fa' }),
+            });
+            if (response.ok) {
+                addNotification('Two-factor authentication reset.');
+                await fetchUsers();
+            } else {
+                const data = await response.json().catch(() => ({}));
+                addNotification(data.message || 'Failed to reset two-factor authentication.');
             }
         } catch {
             addNotification('Request failed.');
@@ -849,7 +919,11 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
                             color: passkeyRegistered ? '#666' : '#e0e0e0',
                             cursor: passkeyRegistered || passkeyBusy ? 'default' : 'pointer',
                         }}
-                        title={passkeyRegistered ? 'Passkey registered' : 'Register a passkey'}
+                        title={
+                            passkeyRegistered
+                                ? 'Passkey registered (password sign in disabled, 2FA removed)'
+                                : 'Register a passkey: disables password sign in and removes 2FA'
+                        }
                         aria-label={passkeyRegistered ? 'Passkey registered' : 'Register a passkey'}
                     >
                         <FiKey size={20} />
@@ -924,13 +998,6 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
                             disabled={!!editingEmail}
                             style={{ ...userInputStyle, flex: '1 1 220px', color: editingEmail ? '#888' : '#e0e0e0' }}
                         />
-                        <input
-                            type="password"
-                            placeholder={editingEmail ? 'New password (optional)' : 'password'}
-                            value={userForm.password}
-                            onChange={(e) => setUserForm((s) => ({ ...s, password: e.target.value }))}
-                            style={{ ...userInputStyle, flex: '1 1 180px' }}
-                        />
                         <select
                             value={userForm.role}
                             onChange={(e) => setUserForm((s) => ({ ...s, role: e.target.value as 'admin' | 'user' }))}
@@ -968,14 +1035,52 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
                         )}
                     </div>
 
+                    {!editingEmail && (
+                        <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888' }}>
+                            New accounts are created as invitations: the user chooses their password and enables 2FA from the setup link.
+                        </p>
+                    )}
+
+                    {setupUrl && (
+                        <div
+                            style={{
+                                display: 'flex',
+                                gap: 8,
+                                alignItems: 'center',
+                                marginBottom: 16,
+                                padding: 10,
+                                background: '#1e1e1e',
+                                border: '1px solid #333',
+                                borderRadius: 4,
+                            }}
+                        >
+                            <input
+                                readOnly
+                                value={setupUrl}
+                                onFocus={(e) => e.target.select()}
+                                style={{ ...userInputStyle, flex: 1, margin: 0 }}
+                                aria-label="Manual setup link"
+                            />
+                            <button
+                                onClick={() => handleCopyToClipboard(setupUrl, 'Setup link copied to clipboard')}
+                                style={{ ...passkeyButtonStyle, padding: '10px 14px', fontFamily: 'monospace' }}
+                                title="Copy setup link"
+                                aria-label="Copy setup link"
+                            >
+                                <FaClipboard size={20} />
+                            </button>
+                        </div>
+                    )}
+
                     {usersLoading ? (
                         <div style={{ color: '#888', fontSize: 13 }}>Loading users...</div>
                     ) : (
-                        <div>
+                        <div style={{ overflowX: 'auto' }}>
                             <div
                                 style={{
                                     display: 'grid',
-                                    gridTemplateColumns: '2fr 1fr 1fr 100px',
+                                    gridTemplateColumns: '2.2fr 0.7fr 0.7fr 0.9fr 0.7fr 0.8fr 200px',
+                                    minWidth: 720,
                                     borderBottom: '1px solid #333',
                                     padding: '8px 4px',
                                     color: '#888',
@@ -985,6 +1090,9 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
                                 <div>Email</div>
                                 <div>Role</div>
                                 <div>Limit</div>
+                                <div>Status</div>
+                                <div>2FA</div>
+                                <div>Passkey</div>
                                 <div style={{ textAlign: 'right' }}>Actions</div>
                             </div>
                             {users.map((user) => (
@@ -992,7 +1100,8 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
                                     key={user.email}
                                     style={{
                                         display: 'grid',
-                                        gridTemplateColumns: '2fr 1fr 1fr 100px',
+                                        gridTemplateColumns: '2.2fr 0.7fr 0.7fr 0.9fr 0.7fr 0.8fr 200px',
+                                        minWidth: 720,
                                         alignItems: 'center',
                                         borderBottom: '1px solid #222',
                                         padding: '8px 4px',
@@ -1006,7 +1115,36 @@ const Dashboard: React.FC<DashboardProps> = ({ sessionEmail, sessionRole, perman
                                     </div>
                                     <div>{user.role}</div>
                                     <div>{user.role === 'admin' ? '—' : user.permanentDeleteLimit}</div>
+                                    <div style={{ color: user.status === 'invited' ? '#fa8c16' : '#52c41a' }}>
+                                        {user.status}
+                                    </div>
+                                    <div style={{ color: user.totpEnabled ? '#52c41a' : '#888' }}>
+                                        {user.totpEnabled ? 'on' : 'off'}
+                                    </div>
+                                    <div style={{ color: user.hasPasskey ? '#e0e0e0' : '#888' }}>
+                                        {user.hasPasskey ? 'yes' : '—'}
+                                    </div>
                                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                        {user.invitePending && !user.immutable && (
+                                            <button
+                                                onClick={() => handleResendInvite(user)}
+                                                style={passkeyButtonStyle}
+                                                title="Resend invitation"
+                                                aria-label={`Resend invitation for ${user.email}`}
+                                            >
+                                                <FiRefreshCw size={20} />
+                                            </button>
+                                        )}
+                                        {user.totpEnabled && (
+                                            <button
+                                                onClick={() => handleResetTotp(user)}
+                                                style={passkeyButtonStyle}
+                                                title="Reset two-factor authentication"
+                                                aria-label={`Reset two-factor authentication for ${user.email}`}
+                                            >
+                                                <FiShield size={20} />
+                                            </button>
+                                        )}
                                         {!user.immutable && (
                                             <>
                                                 <button
