@@ -16,6 +16,11 @@
   ],
   "author": "Aitooor",
   "license": "MIT",
+  "allowScripts": {
+    "better-sqlite3": true,
+    "classic-level": true,
+    "sharp": true
+  },
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.6.2",
