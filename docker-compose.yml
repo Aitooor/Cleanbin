@@ -6,9 +6,12 @@ services:
       - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=production
-      - PORT=3001
-      - ADMIN_EMAIL=example@example.com
-      - ADMIN_PASSWORD=securePassword
+      - PORT=3000
+      # Required: set them in the host environment (never commit real credentials).
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      # Required: signs session cookies. Provide it from the host environment or a secrets file.
+      - AUTH_SECRET=${AUTH_SECRET}
       - DATABASE__SAVE_TYPE=SQLite
       - CACHE_TYPE=SQLite
       - DATABASE__SQLITE_DB_PATH=/app/data/pastes.db

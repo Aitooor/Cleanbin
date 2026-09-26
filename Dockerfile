@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
 # Instalar dependencias (usa npm por defecto; si prefieres yarn, adapta esto)
-RUN npm install
+RUN npm ci
 
 # Copiar el resto del código de la app
 COPY . .
@@ -30,6 +30,9 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 
 ENV NODE_ENV=production
+
+# Persist pastes and admins across container restarts.
+VOLUME /app/data
 
 # Next.js por defecto escucha en el puerto 3000
 EXPOSE 3000

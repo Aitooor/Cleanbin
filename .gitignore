@@ -1,7 +1,7 @@
 /.next/
 next-env.d.ts
+*.tsbuildinfo
 /node_modules/
-package-lock.json
 .env
 /.idea/
 
