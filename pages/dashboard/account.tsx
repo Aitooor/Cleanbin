@@ -28,10 +28,10 @@ export default function AccountPage({ sessionEmail, sessionRole, permanentDelete
 
     useEffect(() => {
         let active = true;
-        fetch('/api/auth/passkey/status')
+        fetch(`/api/auth/passkey/status?email=${encodeURIComponent(sessionEmail)}`)
             .then((response) => (response.ok ? response.json() : Promise.reject()))
             .then((data) => {
-                if (active) setPasskeyRegistered(!!data.registered);
+                if (active) setPasskeyRegistered(!!data.hasPasskey);
             })
             .catch(() => {
                 if (active) setPasskeyRegistered(false);
@@ -39,7 +39,7 @@ export default function AccountPage({ sessionEmail, sessionRole, permanentDelete
         return () => {
             active = false;
         };
-    }, []);
+    }, [sessionEmail]);
 
     useEffect(() => {
         if (passkeyRegistered === null) return;

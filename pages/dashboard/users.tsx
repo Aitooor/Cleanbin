@@ -1,10 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { GetServerSideProps } from 'next';
-import { FiClipboard, FiEdit2, FiRefreshCw, FiSave, FiShield, FiTrash2, FiUserPlus, FiUsers } from 'react-icons/fi';
+import {
+    FiClipboard,
+    FiEdit2,
+    FiKey,
+    FiMail,
+    FiRefreshCw,
+    FiSave,
+    FiShield,
+    FiTrash2,
+    FiUserPlus,
+    FiUsers,
+} from 'react-icons/fi';
 import DashboardLayout from '../../components/dashboard/DashboardLayout';
 import {
     Badge,
     Button,
+    Callout,
     Card,
     EmptyState,
     IconButton,
@@ -34,6 +47,32 @@ type EditUserForm = {
 
 const EMPTY_CREATE_FORM: CreateUserForm = { email: '', role: 'user', permanentDeleteLimit: '2' };
 
+type SecurityActionProps = {
+    title: string;
+    description: string;
+    actionLabel: string;
+    tone?: 'secondary' | 'warning' | 'danger';
+    icon: ReactNode;
+    disabled?: boolean;
+    onAction: () => void;
+};
+
+// Row with a short explanation next to its action, so every security button
+// states exactly what it does before it is pressed.
+function SecurityAction({ title, description, actionLabel, tone = 'secondary', icon, disabled, onAction }: SecurityActionProps) {
+    return (
+        <div className="dash-security-action">
+            <div className="dash-security-action-copy">
+                <span className="dash-security-action-title">{title}</span>
+                <p className="dash-note">{description}</p>
+            </div>
+            <Button variant={tone} size="sm" icon={icon} disabled={disabled} onClick={onAction}>
+                {actionLabel}
+            </Button>
+        </div>
+    );
+}
+
 export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLimit }: DashboardSession) {
     const { addNotification } = useNotification();
     const isAdmin = sessionRole === 'admin';
@@ -47,23 +86,34 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
     const [editTarget, setEditTarget] = useState<DashboardUser | null>(null);
     const [editForm, setEditForm] = useState<EditUserForm>({ role: 'user', permanentDeleteLimit: '0', password: '' });
     const [editBusy, setEditBusy] = useState(false);
+    const [resetUrl, setResetUrl] = useState<string | null>(null);
 
-    const fetchUsers = useCallback(async () => {
+    const fetchUsers = useCallback(async (): Promise<DashboardUser[]> => {
         if (!isAdmin) {
             setLoading(false);
-            return;
+            return [];
         }
         setLoading(true);
         try {
             const response = await fetch('/api/users');
-            if (response.ok) setUsers(await response.json());
-            else if (response.status === 403) addNotification('Admin access is required to manage users.');
+            if (response.ok) {
+                const data: DashboardUser[] = await response.json();
+                setUsers(data);
+                return data;
+            }
+            if (response.status === 403) addNotification('Admin access is required to manage users.');
         } catch {
             addNotification('Failed to load users.');
         } finally {
             setLoading(false);
         }
+        return [];
     }, [isAdmin, addNotification]);
+
+    // Keep the open edit modal in sync with the freshly loaded list.
+    const refreshEditTarget = useCallback((list: DashboardUser[]) => {
+        setEditTarget((current) => (current ? list.find((user) => user.email === current.email) ?? current : current));
+    }, []);
 
     useEffect(() => {
         void fetchUsers();
@@ -111,6 +161,7 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
     };
 
     const handleEdit = (user: DashboardUser) => {
+        setResetUrl(null);
         setEditTarget(user);
         setEditForm({ role: user.role, permanentDeleteLimit: String(user.permanentDeleteLimit), password: '' });
     };
@@ -192,10 +243,70 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
             });
             if (response.ok) {
                 addNotification('Two-factor authentication reset.');
-                await fetchUsers();
+                refreshEditTarget(await fetchUsers());
             } else {
                 const data = await response.json().catch(() => ({}));
                 addNotification(data.message || 'Failed to reset two-factor authentication.');
+            }
+        } catch {
+            addNotification('Request failed.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const handleRemovePasskey = async (user: DashboardUser) => {
+        if (busy) return;
+        if (!window.confirm(`Remove the passkey for ${user.email}? Password sign in will work again.`)) return;
+        setBusy(true);
+        try {
+            const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'remove-passkey' }),
+            });
+            if (response.ok) {
+                addNotification('Passkey removed. Password sign in is enabled again.');
+                refreshEditTarget(await fetchUsers());
+            } else {
+                const data = await response.json().catch(() => ({}));
+                addNotification(data.message || 'Failed to remove the passkey.');
+            }
+        } catch {
+            addNotification('Request failed.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const handleSendPasswordReset = async (user: DashboardUser) => {
+        if (busy) return;
+        if (
+            !window.confirm(
+                `Send a password reset to ${user.email}? This disables their 2FA and passkey and emails a setup link.`
+            )
+        ) {
+            return;
+        }
+        setBusy(true);
+        try {
+            const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'reset-password' }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (response.ok) {
+                refreshEditTarget(await fetchUsers());
+                if (data.setupUrl) {
+                    setResetUrl(data.setupUrl);
+                    addNotification('Password reset created, but the email could not be sent. Copy the setup link.');
+                } else {
+                    setResetUrl(null);
+                    addNotification('Password reset email sent. 2FA and passkey were disabled.');
+                }
+            } else {
+                addNotification(data.message || 'Failed to send the password reset.');
             }
         } catch {
             addNotification('Request failed.');
@@ -230,6 +341,14 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
         navigator.clipboard?.writeText(setupUrl).then(
             () => addNotification('Setup link copied to clipboard.'),
             () => addNotification('Could not copy the setup link.')
+        );
+    };
+
+    const copyResetUrl = () => {
+        if (!resetUrl) return;
+        navigator.clipboard?.writeText(resetUrl).then(
+            () => addNotification('Reset link copied to clipboard.'),
+            () => addNotification('Could not copy the reset link.')
         );
     };
 
@@ -285,15 +404,13 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
                             <FiShield />
                         </IconButton>
                     )}
+                    <IconButton label={`Edit ${user.email}`} onClick={() => handleEdit(user)} disabled={busy}>
+                        <FiEdit2 />
+                    </IconButton>
                     {!user.immutable && (
-                        <>
-                            <IconButton label={`Edit ${user.email}`} onClick={() => handleEdit(user)} disabled={busy}>
-                                <FiEdit2 />
-                            </IconButton>
-                            <IconButton label={`Delete ${user.email}`} tone="danger" onClick={() => void handleDelete(user)} disabled={busy}>
-                                <FiTrash2 />
-                            </IconButton>
-                        </>
+                        <IconButton label={`Delete ${user.email}`} tone="danger" onClick={() => void handleDelete(user)} disabled={busy}>
+                            <FiTrash2 />
+                        </IconButton>
                     )}
                 </span>
             ),
@@ -364,40 +481,116 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
                     title={`Edit ${editTarget.email}`}
                     onClose={() => setEditTarget(null)}
                     footer={
-                        <>
+                        editTarget.immutable ? (
                             <Button variant="ghost" onClick={() => setEditTarget(null)}>
-                                Cancel
+                                Close
                             </Button>
-                            <Button variant="primary" icon={<FiSave />} disabled={editBusy} onClick={() => void handleSaveEdit()}>
-                                {editBusy ? 'Saving...' : 'Save'}
-                            </Button>
-                        </>
+                        ) : (
+                            <>
+                                <Button variant="ghost" onClick={() => setEditTarget(null)}>
+                                    Cancel
+                                </Button>
+                                <Button variant="primary" icon={<FiSave />} disabled={editBusy} onClick={() => void handleSaveEdit()}>
+                                    {editBusy ? 'Saving...' : 'Save'}
+                                </Button>
+                            </>
+                        )
                     }
                 >
                     <div className="dash-stack">
-                        <Select
-                            label="Role"
-                            value={editForm.role}
-                            onChange={(event) => setEditForm((prev) => ({ ...prev, role: event.target.value as SessionRole }))}
-                        >
-                            <option value="user">user</option>
-                            <option value="admin">admin</option>
-                        </Select>
-                        <Input
-                            label="Permanent delete limit"
-                            type="number"
-                            min={0}
-                            value={editForm.permanentDeleteLimit}
-                            onChange={(event) => setEditForm((prev) => ({ ...prev, permanentDeleteLimit: event.target.value }))}
-                        />
-                        <Input
-                            label="New password (optional)"
-                            type="password"
-                            autoComplete="new-password"
-                            placeholder="Leave blank to keep the current password"
-                            value={editForm.password}
-                            onChange={(event) => setEditForm((prev) => ({ ...prev, password: event.target.value }))}
-                        />
+                        {editTarget.immutable ? (
+                            <Callout>
+                                The environment administrator&apos;s role and limit are fixed. Security recovery actions below still
+                                apply.
+                            </Callout>
+                        ) : (
+                            <>
+                                <Select
+                                    label="Role"
+                                    value={editForm.role}
+                                    onChange={(event) => setEditForm((prev) => ({ ...prev, role: event.target.value as SessionRole }))}
+                                >
+                                    <option value="user">user</option>
+                                    <option value="admin">admin</option>
+                                </Select>
+                                <Input
+                                    label="Permanent delete limit"
+                                    type="number"
+                                    min={0}
+                                    value={editForm.permanentDeleteLimit}
+                                    onChange={(event) => setEditForm((prev) => ({ ...prev, permanentDeleteLimit: event.target.value }))}
+                                />
+                                <Input
+                                    label="New password (optional)"
+                                    type="password"
+                                    autoComplete="new-password"
+                                    placeholder="Leave blank to keep the current password"
+                                    value={editForm.password}
+                                    onChange={(event) => setEditForm((prev) => ({ ...prev, password: event.target.value }))}
+                                />
+                            </>
+                        )}
+
+                        <div className="dash-divider" />
+
+                        <div className="dash-stack">
+                            <span className="dash-label">Security</span>
+                            <div className="dash-row">
+                                <span className="dash-muted" style={{ minWidth: 72 }}>
+                                    2FA
+                                </span>
+                                {editTarget.totpEnabled ? <Badge tone="accent">on</Badge> : <Badge>off</Badge>}
+                            </div>
+                            <div className="dash-row">
+                                <span className="dash-muted" style={{ minWidth: 72 }}>
+                                    Passkey
+                                </span>
+                                {editTarget.hasPasskey ? <Badge tone="permanent">registered</Badge> : <Badge>none</Badge>}
+                            </div>
+                        </div>
+
+                        <div className="dash-stack">
+                            <SecurityAction
+                                title="Remove passkey"
+                                description="Disables passkey sign in and lets the user sign in with their password again."
+                                actionLabel="Remove passkey"
+                                tone="danger"
+                                icon={<FiKey />}
+                                disabled={busy || !editTarget.hasPasskey}
+                                onAction={() => void handleRemovePasskey(editTarget)}
+                            />
+                            <SecurityAction
+                                title="Reset 2FA"
+                                description="The user must configure 2FA again on their next sign in."
+                                actionLabel="Reset 2FA"
+                                tone="warning"
+                                icon={<FiShield />}
+                                disabled={busy || !editTarget.totpEnabled}
+                                onAction={() => void handleResetTotp(editTarget)}
+                            />
+                            <SecurityAction
+                                title="Send password reset"
+                                description="Sends an email and disables 2FA and passkey so the user can get back in."
+                                actionLabel="Send password reset"
+                                icon={<FiMail />}
+                                disabled={busy}
+                                onAction={() => void handleSendPasswordReset(editTarget)}
+                            />
+                        </div>
+
+                        {resetUrl && (
+                            <div className="dash-setup-url">
+                                <Input
+                                    readOnly
+                                    value={resetUrl}
+                                    onFocus={(event) => event.target.select()}
+                                    aria-label="Manual password reset link"
+                                />
+                                <IconButton label="Copy reset link" onClick={copyResetUrl}>
+                                    <FiClipboard />
+                                </IconButton>
+                            </div>
+                        )}
                     </div>
                 </Modal>
             )}

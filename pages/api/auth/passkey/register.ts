@@ -27,8 +27,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(400).json({ message: 'Missing registration response' });
         }
 
-        const userID = await getUserID();
-        const expectedChallenge = consumeChallenge(`registration:${userID}`);
+        // The passkey belongs to the signed-in account, whatever its role.
+        const email = session.email;
+        const userID = getUserID(email);
+        const expectedChallenge = consumeChallenge(`registration:${email}`);
         if (!expectedChallenge) {
             return res.status(400).json({ message: 'Registration challenge expired. Please try again.' });
         }
@@ -46,24 +48,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const { credential } = verification.registrationInfo;
-        const accountEmail = process.env.ADMIN_EMAIL || session.email;
         const record: PasskeyRecord = {
             credentialID: credential.id,
             credentialPublicKey: toBase64Url(credential.publicKey),
             counter: credential.counter,
             transports: credential.transports ?? [],
             userID,
-            email: accountEmail,
+            email,
             createdAt: new Date().toISOString(),
         };
         await savePasskey(record);
 
         // Signing in with a passkey replaces both the password and the TOTP code,
         // so the second factor is removed as well. Report both effects to the UI.
-        const account = await getAccountState(accountEmail);
+        const account = await getAccountState(email);
         const totpRemoved = !!account?.totpEnabled;
         if (totpRemoved) {
-            await disableTotp(accountEmail);
+            await disableTotp(email);
         }
 
         return res.status(200).json({ verified: true, passwordLoginDisabled: true, totpRemoved });

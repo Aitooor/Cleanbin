@@ -4,6 +4,7 @@ import {
     deleteUser,
     updateUser,
     issueInviteToken,
+    issuePasswordResetToken,
     disableTotp,
     ImmutableUserError,
     PASSWORD_MIN_LENGTH,
@@ -12,9 +13,10 @@ import {
     type UpdateUserPatch,
     type UserRole,
 } from '../../../utils/users';
+import { deletePasskey } from '../../../utils/passkeys';
 import { resolveOrigin } from '../../../utils/passkeyRequest';
 import { buildSetupUrl } from '../../../utils/invites';
-import { sendInvitationEmail } from '../../../utils/mailer';
+import { sendInvitationEmail, sendPasswordResetEmail } from '../../../utils/mailer';
 
 // Cap the request body size for this route.
 export const config = {
@@ -71,6 +73,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     const inviteToken = await issueInviteToken(email);
                     const url = buildSetupUrl(inviteToken, resolveOrigin(req));
                     const delivery = await sendInvitationEmail(email, url);
+                    // Same fallback as creation: the link is exposed only when
+                    // email delivery is unavailable.
+                    return res.status(200).json({
+                        emailSent: delivery.sent,
+                        ...(delivery.sent ? {} : { setupUrl: url }),
+                    });
+                } catch (error) {
+                    if (sendUserError(res, error)) return;
+                    throw error;
+                }
+            }
+
+            if (action === 'remove-passkey') {
+                // Recovery path: clearing the passkey restores password sign in.
+                // Allowed for every account, including the environment admin.
+                await deletePasskey(email);
+                return res.status(200).json({ message: 'Passkey removed' });
+            }
+
+            if (action === 'reset-password') {
+                try {
+                    // Issue the single-use token first, then clear the second
+                    // factors so the user can get back in and is forced to set
+                    // them up again from the setup link.
+                    const token = await issuePasswordResetToken(email);
+                    await disableTotp(email);
+                    await deletePasskey(email);
+
+                    const url = buildSetupUrl(token, resolveOrigin(req));
+                    const delivery = await sendPasswordResetEmail(email, url);
                     // Same fallback as creation: the link is exposed only when
                     // email delivery is unavailable.
                     return res.status(200).json({

@@ -865,6 +865,31 @@
     color: #ff9a9d;
 }
 
+/* ---------- Security actions (edit user) ---------- */
+.dash-security-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--dash-space-4);
+    padding: var(--dash-space-3) var(--dash-space-4);
+    border: 1px solid var(--dash-border);
+    border-radius: var(--dash-radius);
+    background: var(--dash-surface-2);
+}
+
+.dash-security-action-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.dash-security-action-title {
+    font-size: var(--dash-fs-sm);
+    font-weight: 600;
+    color: var(--dash-text);
+}
+
 .dash-checkbox {
     width: 15px;
     height: 15px;

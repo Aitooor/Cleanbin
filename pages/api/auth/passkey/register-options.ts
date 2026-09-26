@@ -20,9 +20,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!session) return;
 
         const rpID = resolveRpID(req);
-        const userID = await getUserID();
-        const email = process.env.ADMIN_EMAIL || session.email;
-        const existing = await getPasskey();
+        // Each account owns its passkey: the session email decides which record
+        // is touched, never the environment admin.
+        const email = session.email;
+        const userID = getUserID(email);
+        const existing = await getPasskey(email);
 
         const options = await generateRegistrationOptions({
             rpName: 'Cleanbin',
@@ -39,7 +41,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             },
         });
 
-        saveChallenge(`registration:${userID}`, options.challenge);
+        saveChallenge(`registration:${email}`, options.challenge);
         return res.status(200).json(options);
     } catch (error) {
         console.error('POST /api/auth/passkey/register-options error:', error);

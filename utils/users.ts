@@ -495,6 +495,22 @@ export async function issueInviteToken(email: string): Promise<string> {
     return invite.token;
 }
 
+// Issues a fresh single-use token for an active account (including the
+// environment admin, whose record is created on demand). The caller is expected
+// to also clear the account's second factors so the owner can get back in.
+export async function issuePasswordResetToken(email: string): Promise<string> {
+    const normalized = normalizeEmail(email);
+    const users = await loadStoredUsers();
+    const user = getOrCreateMutableRecord(users, normalized);
+    if (!user) throw new UserNotFoundError('User not found');
+
+    const invite = generateInviteToken();
+    user.inviteTokenHash = invite.hash;
+    user.inviteExpiresAt = invite.expiresAt;
+    await saveUsers(users);
+    return invite.token;
+}
+
 // The environment admin is not stored in users.json; create a minimal record on
 // demand so its TOTP fields have somewhere durable to live. Such a record keeps
 // an empty password (login still comes from ADMIN_PASSWORD).

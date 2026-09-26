@@ -18,9 +18,14 @@ export interface PasskeyRecord {
     createdAt: string;
 }
 
-interface PasskeyStore {
-    userID: string | null;
-    passkey: PasskeyRecord | null;
+// One passkey per account, keyed by the normalized email. The previous format
+// stored a single { userID, passkey } object, which let one account overwrite
+// another's passkey; loadStore migrates it in place.
+export type PasskeyStore = Record<string, PasskeyRecord>;
+
+interface LegacyStore {
+    userID?: string | null;
+    passkey?: PasskeyRecord | null;
 }
 
 interface ChallengeEntry {
@@ -49,29 +54,21 @@ export function fromBase64Url(input: string): Uint8Array<ArrayBuffer> {
     return bytes;
 }
 
-function emptyStore(): PasskeyStore {
-    return { userID: null, passkey: null };
+function normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
 }
 
-async function loadStore(): Promise<PasskeyStore> {
-    let raw: string;
-    try {
-        raw = await fs.readFile(PASSKEYS_FILE_PATH, 'utf-8');
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyStore();
-        throw error;
-    }
+function isPasskeyRecord(value: unknown): value is PasskeyRecord {
+    if (!value || typeof value !== 'object') return false;
+    const record = value as Record<string, unknown>;
+    return typeof record.credentialID === 'string' && typeof record.email === 'string';
+}
 
-    try {
-        const parsed = JSON.parse(raw) as Partial<PasskeyStore>;
-        return {
-            userID: typeof parsed.userID === 'string' ? parsed.userID : null,
-            passkey: parsed.passkey && typeof parsed.passkey === 'object' ? (parsed.passkey as PasskeyRecord) : null,
-        };
-    } catch {
-        // A corrupt file must not crash auth; treat it as "no passkey".
-        return emptyStore();
-    }
+function coerceRecord(value: unknown, fallbackEmail?: string): PasskeyRecord | null {
+    if (!isPasskeyRecord(value)) return null;
+    const candidate = value.email.trim() || fallbackEmail || '';
+    if (!candidate) return null;
+    return { ...value, email: normalizeEmail(candidate) };
 }
 
 async function saveStore(store: PasskeyStore): Promise<void> {
@@ -82,33 +79,97 @@ async function saveStore(store: PasskeyStore): Promise<void> {
     await fs.rename(tmpPath, PASSKEYS_FILE_PATH);
 }
 
-export async function getPasskey(): Promise<PasskeyRecord | null> {
-    const store = await loadStore();
-    return store.passkey;
+// Legacy files always carry a "passkey" key (even when null); the email-keyed
+// map never does, so its presence unambiguously marks an old file.
+function isLegacyStore(parsed: Record<string, unknown>): boolean {
+    return 'passkey' in parsed;
 }
 
-export async function hasPasskey(): Promise<boolean> {
-    return (await getPasskey()) !== null;
+function migrateLegacyStore(parsed: LegacyStore): PasskeyStore {
+    const record = coerceRecord(parsed.passkey);
+    return record ? { [record.email]: record } : {};
+}
+
+async function loadStore(): Promise<PasskeyStore> {
+    let raw: string;
+    try {
+        raw = await fs.readFile(PASSKEYS_FILE_PATH, 'utf-8');
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+        throw error;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+        if (isLegacyStore(parsed)) {
+            const migrated = migrateLegacyStore(parsed as LegacyStore);
+            await saveStore(migrated);
+            return migrated;
+        }
+
+        const store: PasskeyStore = {};
+        for (const [key, value] of Object.entries(parsed)) {
+            const record = coerceRecord(value, key);
+            if (record) store[record.email] = record;
+        }
+        return store;
+    } catch {
+        // A corrupt file must not crash auth; treat it as "no passkeys".
+        return {};
+    }
+}
+
+export async function getPasskey(email: string): Promise<PasskeyRecord | null> {
+    const store = await loadStore();
+    return store[normalizeEmail(email)] ?? null;
+}
+
+export async function hasPasskey(email: string): Promise<boolean> {
+    return (await getPasskey(email)) !== null;
+}
+
+export async function hasAnyPasskey(): Promise<boolean> {
+    const store = await loadStore();
+    return Object.keys(store).length > 0;
+}
+
+// Everything a login ceremony may present, so any account can sign in without
+// typing its email first.
+export async function listCredentialIds(): Promise<{ id: string; transports: string[] }[]> {
+    const store = await loadStore();
+    return Object.values(store).map((record) => ({
+        id: record.credentialID,
+        transports: record.transports ?? [],
+    }));
+}
+
+export async function findPasskeyByCredentialId(credentialID: string): Promise<PasskeyRecord | null> {
+    const store = await loadStore();
+    return Object.values(store).find((record) => record.credentialID === credentialID) ?? null;
 }
 
 export async function savePasskey(record: PasskeyRecord): Promise<void> {
-    await saveStore({ userID: record.userID, passkey: record });
+    const store = await loadStore();
+    const email = normalizeEmail(record.email);
+    store[email] = { ...record, email };
+    await saveStore(store);
 }
 
-export async function deletePasskey(): Promise<void> {
+export async function deletePasskey(email: string): Promise<void> {
     const store = await loadStore();
-    await saveStore({ userID: store.userID, passkey: null });
+    const key = normalizeEmail(email);
+    if (!(key in store)) return;
+    delete store[key];
+    await saveStore(store);
 }
 
-// Stable WebAuthn user handle. Generated once and reused across (re)registrations
-// so a browser keeps the same account entry.
-export async function getUserID(): Promise<string> {
-    const store = await loadStore();
-    if (store.userID) return store.userID;
-
-    const userID = toBase64Url(crypto.randomBytes(USER_ID_BYTES));
-    await saveStore({ userID, passkey: store.passkey });
-    return userID;
+// Stable WebAuthn user handle. Derived from the email so each account keeps its
+// own browser entry without persisting extra state.
+export function getUserID(email: string): string {
+    const digest = crypto.createHash('sha256').update(normalizeEmail(email)).digest();
+    return toBase64Url(digest.subarray(0, USER_ID_BYTES));
 }
 
 function purgeExpiredChallenges(now: number): void {

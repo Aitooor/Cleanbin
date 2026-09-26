@@ -13,13 +13,14 @@ export interface EmailDeliveryResult {
     error?: string;
 }
 
-function buildInviteSubject(): string {
-    return 'Set up your Cleanbin account';
+interface SetupEmailContent {
+    subject: string;
+    intro: string;
 }
 
-function buildInviteText(setupUrl: string): string {
+function buildSetupText(intro: string, setupUrl: string): string {
     return [
-        'You have been invited to Cleanbin.',
+        intro,
         '',
         'Open the link below to choose your password and enable two-factor authentication:',
         setupUrl,
@@ -28,18 +29,19 @@ function buildInviteText(setupUrl: string): string {
     ].join('\n');
 }
 
-function buildInviteHtml(setupUrl: string): string {
+function buildSetupHtml(intro: string, setupUrl: string): string {
     return [
-        '<p>You have been invited to Cleanbin.</p>',
+        `<p>${intro}</p>`,
         '<p>Open the link below to choose your password and enable two-factor authentication:</p>',
         `<p><a href="${setupUrl}">${setupUrl}</a></p>`,
         '<p>This link expires in 48 hours and can only be used once.</p>',
     ].join('');
 }
 
-export async function sendInvitationEmail(
+async function sendSetupEmail(
     to: string,
-    setupUrl: string
+    setupUrl: string,
+    content: SetupEmailContent
 ): Promise<EmailDeliveryResult> {
     const apiKey = process.env.RESEND_API_KEY?.trim();
     const from = process.env.MAIL_FROM?.trim();
@@ -57,9 +59,9 @@ export async function sendInvitationEmail(
             body: JSON.stringify({
                 from,
                 to: [to],
-                subject: buildInviteSubject(),
-                text: buildInviteText(setupUrl),
-                html: buildInviteHtml(setupUrl),
+                subject: content.subject,
+                text: buildSetupText(content.intro, setupUrl),
+                html: buildSetupHtml(content.intro, setupUrl),
             }),
         });
 
@@ -70,4 +72,24 @@ export async function sendInvitationEmail(
     } catch {
         return { sent: false, error: 'Email delivery failed' };
     }
+}
+
+export async function sendInvitationEmail(
+    to: string,
+    setupUrl: string
+): Promise<EmailDeliveryResult> {
+    return sendSetupEmail(to, setupUrl, {
+        subject: 'Set up your Cleanbin account',
+        intro: 'You have been invited to Cleanbin.',
+    });
+}
+
+export async function sendPasswordResetEmail(
+    to: string,
+    setupUrl: string
+): Promise<EmailDeliveryResult> {
+    return sendSetupEmail(to, setupUrl, {
+        subject: 'Reset your Cleanbin password',
+        intro: 'A password reset was requested for your Cleanbin account.',
+    });
 }

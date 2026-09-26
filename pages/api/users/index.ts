@@ -7,7 +7,7 @@ import {
     UserValidationError,
     type UserRole,
 } from '../../../utils/users';
-import { getPasskey } from '../../../utils/passkeys';
+import { hasPasskey } from '../../../utils/passkeys';
 import { resolveOrigin } from '../../../utils/passkeyRequest';
 import { buildSetupUrl } from '../../../utils/invites';
 import { sendInvitationEmail } from '../../../utils/mailer';
@@ -38,11 +38,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
         if (req.method === 'GET') {
             const users = await listUsers();
-            const passkey = await getPasskey();
-            const withPasskey = users.map((user) => ({
-                ...user,
-                hasPasskey: !!passkey && passkey.email === user.email,
-            }));
+            const withPasskey = await Promise.all(
+                users.map(async (user) => ({
+                    ...user,
+                    hasPasskey: user.email ? await hasPasskey(user.email) : false,
+                }))
+            );
             return res.status(200).json(withPasskey);
         }
 

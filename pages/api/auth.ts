@@ -4,7 +4,7 @@ import {
   createAuthChallenge,
   getSessionFromRequest,
 } from '../../utils/auth';
-import { getPasskey } from '../../utils/passkeys';
+import { hasPasskey } from '../../utils/passkeys';
 import { getAccountState } from '../../utils/users';
 
 // Cap the request body size for this route.
@@ -33,10 +33,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(401).json({ message: 'Invalid credentials' });
       }
 
-      // Once a passkey is registered it becomes the only way in for its owner
-      // (the environment admin), by design. Other accounts keep using passwords.
-      const passkey = await getPasskey();
-      if (passkey && email === passkey.email) {
+      // A passkey registered for this account becomes its only way in, by design.
+      // Other accounts keep using passwords.
+      if (await hasPasskey(email)) {
         return res.status(403).json({
           message:
             'Password login is disabled because a passkey is registered. Use the passkey or remove it from the dashboard.',

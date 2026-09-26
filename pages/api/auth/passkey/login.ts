@@ -1,18 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { serialize } from 'cookie';
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, WebAuthnCredential } from '@simplewebauthn/server';
-import {
-    createSessionToken,
-    SESSION_COOKIE_NAME,
-    SESSION_MAX_AGE_SECONDS,
-} from '../../../../utils/auth';
+import { setSessionCookie } from '../../../../utils/auth';
 import {
     consumeChallenge,
+    findPasskeyByCredentialId,
     fromBase64Url,
-    getPasskey,
     savePasskey,
 } from '../../../../utils/passkeys';
+import { getAccountState } from '../../../../utils/users';
 import { resolveOrigin, resolveRpID } from '../../../../utils/passkeyRequest';
 
 // Public: this is the passkey login endpoint itself.
@@ -28,15 +24,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(400).json({ message: 'Missing authentication response' });
         }
 
-        const passkey = await getPasskey();
+        // Locate the account that owns the presented credential; its email and
+        // role decide the session, so no account can borrow another's passkey.
+        const passkey = await findPasskeyByCredentialId(response.id);
         if (!passkey) {
-            return res.status(400).json({ message: 'No passkey is registered' });
-        }
-        if (response.id !== passkey.credentialID) {
             return res.status(401).json({ message: 'Unknown passkey' });
         }
 
-        const expectedChallenge = consumeChallenge(`authentication:${passkey.credentialID}`);
+        const expectedChallenge =
+            consumeChallenge(`authentication:${passkey.credentialID}`) ??
+            consumeChallenge('authentication:discoverable');
         if (!expectedChallenge) {
             return res.status(400).json({ message: 'Authentication challenge expired. Please try again.' });
         }
@@ -66,18 +63,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             counter: verification.authenticationInfo.newCounter,
         });
 
-        const token = createSessionToken(passkey.email, 'admin');
-        res.setHeader(
-            'Set-Cookie',
-            serialize(SESSION_COOKIE_NAME, token, {
-                httpOnly: true,
-                secure: true,
-                sameSite: 'lax',
-                path: '/',
-                maxAge: SESSION_MAX_AGE_SECONDS,
-            })
-        );
-        return res.status(200).json({ message: 'Login successful', email: passkey.email, role: 'admin' });
+        const account = await getAccountState(passkey.email);
+        const role = account?.role ?? 'user';
+        setSessionCookie(res, passkey.email, role);
+        return res.status(200).json({ message: 'Login successful', email: passkey.email, role });
     } catch (error) {
         console.error('POST /api/auth/passkey/login error:', error);
         return res.status(401).json({ message: 'Passkey authentication failed' });
