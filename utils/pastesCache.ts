@@ -6,6 +6,10 @@ type Paste = { id: string; content: string; name?: string; permanent?: any; crea
 let cached: { ts: number; total: number; items: Paste[] } | null = null;
 let started = false;
 
+// Short TTL so listings stay fresh without decompressing the whole database on
+// every cycle. The full refresh only runs on demand when the cache is stale.
+const PAGE_CACHE_TTL_MS = Math.min((config.cache.ttl || 3600) * 1000, 30_000);
+
 export async function refreshCache() {
   await deleteExpiredPastes();
   // attempt to get all pastes efficiently via getPastes with a very large limit
@@ -15,8 +19,7 @@ export async function refreshCache() {
 }
 
 export async function getPage(page: number, limit: number, force = false) {
-  const ttlMs = (config.cache.ttl || 3600) * 1000;
-  if (force || !cached || Date.now() - cached.ts > ttlMs) {
+  if (force || !cached || Date.now() - cached.ts > PAGE_CACHE_TTL_MS) {
     await refreshCache();
   }
   const total = cached ? cached.total : 0;
@@ -75,14 +78,13 @@ export function startPrecache() {
     const schedule = process.env.PRECACHE_CRON || config.cache_settings.precache_cron || '*/1 * * * *'; // every minute
     cron.schedule(schedule, async () => {
       try {
-        await refreshCache();
-        // console.log('Pastes cache refreshed by cron');
+        // Only purge expired rows (single indexed DELETE). The full listing
+        // refresh is lazy and happens on demand with a short TTL.
+        await deleteExpiredPastes();
       } catch (err) {
         // console.error('Precache error', err);
       }
     });
-    // initial fill
-    refreshCache().catch(() => {});
   } catch (err) {
     // node-cron not installed or failed; ignore
   }
@@ -92,4 +94,3 @@ export function startPrecache() {
 startPrecache();
 
 export default { refreshCache, getPage, invalidateCache, startPrecache };
-

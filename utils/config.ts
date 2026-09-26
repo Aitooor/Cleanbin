@@ -1,6 +1,26 @@
 // Lightweight config loader that supports "namespaced" env keys using double underscores.
 // Example: DATABASE__SAVE_TYPE -> config.database.save_type
+import fs from 'fs';
+import path from 'path';
+
 type AnyObj = Record<string, any>;
+
+// All persisted data lives under a single absolute directory so the app never
+// depends on the process working directory.
+export const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(process.cwd(), 'data');
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// Resolve a configured path to an absolute one rooted at DATA_DIR. Absolute
+// paths are respected as-is so deployments can point outside DATA_DIR.
+function resolveDataPath(value: string | undefined, fallback: string): string {
+  const raw = value && value.trim() ? value.trim() : fallback;
+  if (path.isAbsolute(raw)) return raw;
+  const relative = raw.replace(/^\.\//, '').replace(/^data[\\/]/, '');
+  return path.join(DATA_DIR, relative);
+}
 
 function parseNamespaced(prefix: string): AnyObj {
   const out: AnyObj = {};
@@ -56,6 +76,10 @@ function toNumber(v: string | undefined, fallback = 3600) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+const cacheSettings = parseNamespaced('CACHE');
+cacheSettings.leveldb_path = resolveDataPath(cacheSettings.leveldb_path, 'cache/');
+cacheSettings.sqlite_db_path = resolveDataPath(cacheSettings.sqlite_db_path, 'cache.db');
+
 export const config: AppConfig = {
   database: {
     save_type: (process.env.DATABASE__SAVE_TYPE ||
@@ -63,10 +87,14 @@ export const config: AppConfig = {
       parseNamespaced('DATABASE').save_type ||
       process.env.DATABASE__SAVE_TYPE ||
       'JSON') as string,
-    json_db_path:
-      process.env.DATABASE__JSON_DB_PATH || parseNamespaced('DATABASE').json_db_path || './data/pastes/',
-    sqlite_db_path:
-      process.env.DATABASE__SQLITE_DB_PATH || parseNamespaced('DATABASE').sqlite_db_path || './data/pastes.db',
+    json_db_path: resolveDataPath(
+      process.env.DATABASE__JSON_DB_PATH || parseNamespaced('DATABASE').json_db_path,
+      'pastes/'
+    ),
+    sqlite_db_path: resolveDataPath(
+      process.env.DATABASE__SQLITE_DB_PATH || parseNamespaced('DATABASE').sqlite_db_path,
+      'pastes.db'
+    ),
     mongodb_uri:
       process.env.DATABASE__MONGODB_URI || parseNamespaced('DATABASE').mongodb_uri,
     postgres_uri:
@@ -83,7 +111,7 @@ export const config: AppConfig = {
       'In-memory',
     ttl: toNumber(process.env.CACHE_TTL || String(parseNamespaced('CACHE').ttl), 3600),
   },
-  cache_settings: parseNamespaced('CACHE'),
+  cache_settings: cacheSettings,
   compression: {
     type: (process.env.COMPRESSION_TYPE || (parseNamespaced('COMPRESSION').type as string) || 'brotli') as
       | 'brotli'
@@ -94,4 +122,3 @@ export const config: AppConfig = {
 };
 
 export default config;
-

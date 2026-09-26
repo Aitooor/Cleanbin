@@ -24,6 +24,38 @@ async function decompressBuffer(buf: Buffer): Promise<Buffer> {
   return await brotliDecompress(buf);
 }
 
+// Synchronous variants: required to keep better-sqlite3 transactions atomic,
+// since a transaction callback must not await.
+function compressBufferSync(buf: Buffer): Buffer {
+  if (config.compression.type === 'none') return buf;
+  if (config.compression.type === 'gzip') return zlib.gzipSync(buf);
+  const opts = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: config.compression.quality } };
+  return zlib.brotliCompressSync(buf, opts);
+}
+
+function decompressBufferSync(buf: Buffer): Buffer {
+  if (config.compression.type === 'none') return buf;
+  if (config.compression.type === 'gzip') return zlib.gunzipSync(buf);
+  return zlib.brotliDecompressSync(buf);
+}
+
+const CACHE_TTL_MS = (config.cache.ttl || 3600) * 1000;
+
+// Write a file atomically: write to a sibling temp file and rename over the
+// target so a crash mid-write can never truncate the existing data.
+async function writeFileAtomic(
+  fsModule: typeof import('fs/promises'),
+  filePath: string,
+  data: Buffer | string
+): Promise<void> {
+  const nodePath = require('path');
+  const dir = nodePath.dirname(filePath);
+  await fsModule.mkdir(dir, { recursive: true });
+  const tmpPath = nodePath.join(dir, `.${nodePath.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+  await fsModule.writeFile(tmpPath, data);
+  await fsModule.rename(tmpPath, filePath);
+}
+
 // Keep server-only requires lazy to avoid bundling drivers into client code
 let fs: typeof import('fs/promises') | undefined;
 let pathModule: typeof import('path') | undefined;
@@ -197,7 +229,8 @@ function createCache(): CacheBackend {
           return JSON.parse(row.value);
         },
         set: async (k: string, v: any, ttlMs?: number) => {
-          const expiresAt = ttlMs ? Date.now() + ttlMs : null;
+          const ttl = ttlMs ?? CACHE_TTL_MS;
+          const expiresAt = ttl > 0 ? Date.now() + ttl : null;
           const str = JSON.stringify(v);
           db.prepare('INSERT OR REPLACE INTO cache (key, value, expiresAt) VALUES (?,?,?)').run(k, str, expiresAt);
         },
@@ -280,7 +313,7 @@ class JsonDatabase implements DatabaseBackend {
     // compress and store binary
     const payloadBuf = Buffer.from(JSON.stringify(data));
     const compressed = await compressBuffer(payloadBuf);
-    await fs!.writeFile(filePath, compressed);
+    await writeFileAtomic(fs!, filePath, compressed);
     // cache holds decompressed object for fast reads
     await cache.set(`paste_${id}`, data);
     return id;
@@ -303,7 +336,7 @@ class JsonDatabase implements DatabaseBackend {
         const next: Paste = { ...data, expiresAt: newExpiresAt };
         const payloadBuf = Buffer.from(JSON.stringify(next));
         const compressed = await compressBuffer(payloadBuf);
-        await fs!.writeFile(filePath, compressed);
+        await writeFileAtomic(fs!, filePath, compressed);
         await cache.set(cacheKey, next);
         return next;
       }
@@ -344,7 +377,7 @@ class JsonDatabase implements DatabaseBackend {
       data.name = newName;
       const newBuf = Buffer.from(JSON.stringify(data));
       const compressed = await compressBuffer(newBuf);
-      await fs!.writeFile(filePath, compressed);
+      await writeFileAtomic(fs!, filePath, compressed);
       await cache.set(`paste_${id}`, data);
       return data;
     } catch (err: any) {
@@ -434,54 +467,82 @@ function createDatabase(): DatabaseBackend {
       const db = new Database(sqlitePath);
       // Minimal implementation that uses a simple table "pastes" (id TEXT PRIMARY KEY, payload TEXT)
       db.exec(`CREATE TABLE IF NOT EXISTS pastes (id TEXT PRIMARY KEY, payload TEXT)`);
+      db.exec(`CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT)`);
+
+      // Idempotent migration: add expires_at so purging never has to decompress
+      // the whole table.
+      const columns = db.prepare('PRAGMA table_info(pastes)').all();
+      if (!columns.some((column: any) => column.name === 'expires_at')) {
+        db.exec('ALTER TABLE pastes ADD COLUMN expires_at INTEGER');
+      }
+
+      // One-time backfill for rows created before expires_at existed.
+      const backfilled = db.prepare("SELECT value FROM schema_meta WHERE key = 'expires_at_backfill'").get();
+      if (!backfilled) {
+        const legacyRows = db.prepare('SELECT id, payload FROM pastes WHERE expires_at IS NULL').all();
+        const setExpiresAt = db.prepare('UPDATE pastes SET expires_at = ? WHERE id = ?');
+        const backfill = db.transaction(() => {
+          for (const row of legacyRows) {
+            try {
+              const parsed = JSON.parse(decompressBufferSync(Buffer.from(row.payload, 'base64')).toString('utf-8'));
+              const isTemp = parsed.permanent === false || parsed.permanent === 'false';
+              if (isTemp && parsed.expiresAt) {
+                setExpiresAt.run(Date.parse(parsed.expiresAt), row.id);
+              }
+            } catch {
+              // Skip rows that cannot be decoded.
+            }
+          }
+        });
+        backfill();
+        db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('expires_at_backfill', '1')").run();
+      }
+
+      const expirationDays = () => parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
+      const computeExpiresAt = () =>
+        new Date(Date.now() + expirationDays() * 24 * 60 * 60 * 1000).toISOString();
+
       return {
         savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
-          const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
-          const obj = { 
-            id, 
-            content, 
-            name, 
-            permanent, 
+          const expiresAt = permanent ? null : computeExpiresAt();
+          const obj = {
+            id,
+            content,
+            name,
+            permanent,
             createdAt: new Date().toISOString(),
-            ...(permanent ? {} : {
-              expiresAt: new Date(
-                Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
-              ).toISOString()
-            })
+            ...(expiresAt ? { expiresAt } : {}),
           };
           const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
-          const b64 = compressed.toString('base64');
-          const stmt = db.prepare('INSERT OR REPLACE INTO pastes (id,payload) VALUES (?,?)');
-          stmt.run(id, b64);
+          db.prepare('INSERT OR REPLACE INTO pastes (id, payload, expires_at) VALUES (?,?,?)').run(
+            id,
+            compressed.toString('base64'),
+            expiresAt ? Date.parse(expiresAt) : null
+          );
           await cache.set(`paste_${id}`, obj);
           return id;
         },
         getPaste: async (id: string) => {
-          const row = db.prepare('SELECT payload FROM pastes WHERE id = ?').get(id);
-          if (!row) return null;
-          const buf = Buffer.from(row.payload, 'base64');
-          const decompressed = await decompressBuffer(buf);
-          let parsed = JSON.parse(decompressed.toString('utf-8'));
-          
-          // Extend expiration for temporary pastes when accessed
-          const isTemp = parsed.permanent === false || parsed.permanent === 'false';
-          if (isTemp) {
-            const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
-            const newExpiresAt = new Date(
-              Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
-            ).toISOString();
-            
-            // Update the data with new expiration
-            parsed = { ...parsed, expiresAt: newExpiresAt };
-            
-            // Save the updated data back to database
-            const updatedCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
-            const updatedB64 = updatedCompressed.toString('base64');
-            const stmt = db.prepare('UPDATE pastes SET payload = ? WHERE id = ?');
-            stmt.run(updatedB64, id);
-          }
-          
-          await cache.set(`paste_${id}`, parsed);
+          // Read + extend inside one synchronous transaction so concurrent
+          // requests cannot race the expiration refresh.
+          const readAndExtend = db.transaction((): Paste | null => {
+            const row = db.prepare('SELECT payload FROM pastes WHERE id = ?').get(id);
+            if (!row) return null;
+            const parsed = JSON.parse(decompressBufferSync(Buffer.from(row.payload, 'base64')).toString('utf-8'));
+            const isTemp = parsed.permanent === false || parsed.permanent === 'false';
+            if (!isTemp) return parsed;
+            const expiresAt = computeExpiresAt();
+            const next = { ...parsed, expiresAt };
+            const compressed = compressBufferSync(Buffer.from(JSON.stringify(next)));
+            db.prepare('UPDATE pastes SET payload = ?, expires_at = ? WHERE id = ?').run(
+              compressed.toString('base64'),
+              Date.parse(expiresAt),
+              id
+            );
+            return next;
+          });
+          const parsed = readAndExtend();
+          if (parsed) await cache.set(`paste_${id}`, parsed);
           return parsed;
         },
         deletePaste: async (id: string) => {
@@ -491,17 +552,23 @@ function createDatabase(): DatabaseBackend {
         updatePasteName: async (id: string, newName: string) => {
           const row = db.prepare('SELECT payload FROM pastes WHERE id = ?').get(id);
           if (!row) return null;
-          const buf = Buffer.from(row.payload, 'base64');
-          const decompressed = await decompressBuffer(buf);
-          const parsed = JSON.parse(decompressed.toString('utf-8'));
+          const parsed = JSON.parse(decompressBufferSync(Buffer.from(row.payload, 'base64')).toString('utf-8'));
           parsed.name = newName;
-          const newCompressed = await compressBuffer(Buffer.from(JSON.stringify(parsed)));
-          db.prepare('UPDATE pastes SET payload = ? WHERE id = ?').run(newCompressed.toString('base64'), id);
+          const compressed = compressBufferSync(Buffer.from(JSON.stringify(parsed)));
+          db.prepare('UPDATE pastes SET payload = ? WHERE id = ?').run(compressed.toString('base64'), id);
           await cache.set(`paste_${id}`, parsed);
           return parsed;
         },
         deleteExpiredPastes: async () => {
-          // No-op by default; TTL handling can be implemented on application level
+          const now = Date.now();
+          const expired = db
+            .prepare('SELECT id FROM pastes WHERE expires_at IS NOT NULL AND expires_at < ?')
+            .all(now);
+          const purge = db.transaction(() => {
+            db.prepare('DELETE FROM pastes WHERE expires_at IS NOT NULL AND expires_at < ?').run(now);
+          });
+          purge();
+          await Promise.all(expired.map((row: any) => cache.del(`paste_${row.id}`)));
         },
         getAllPastes: async () => {
           const rows = db.prepare('SELECT payload FROM pastes').all();
