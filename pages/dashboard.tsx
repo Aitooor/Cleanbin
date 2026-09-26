@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 // Using simple list rendering for stability (virtualization removed temporarily)
 import { useRouter } from 'next/router';
-import { useNotification } from 'components/NotificationProvider';
+import { useNotification } from '../components/NotificationProvider';
 import { FaTrash, FaClipboard, FaEye, FaClone, FaPen } from 'react-icons/fa';
 import { FiLogOut } from 'react-icons/fi';
 import type { GetServerSideProps } from 'next';
 import { parse } from 'cookie';
-import AdvancedFilters from 'components/AdvancedFilters';
+import AdvancedFilters from '../components/AdvancedFilters';
 
 type DashboardProps = {};
 
