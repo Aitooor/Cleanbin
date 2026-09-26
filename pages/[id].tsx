@@ -474,13 +474,21 @@ const PastePreview = () => {
                 flexDirection: 'column',
             }}
         >
+            <div
+                style={{
+                    position: 'fixed',
+                    top: 12,
+                    right: 12,
+                    zIndex: 10,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                    gap: 8,
+                }}
+            >
             {(name || (!permanent && timeLeftLabel)) && (
                 <div
                     style={{
-                        position: 'fixed',
-                        top: 12,
-                        right: 12,
-                        zIndex: 10,
                         maxWidth: 220,
                         padding: '8px 12px',
                         background: 'rgba(40, 40, 40, 0.92)',
@@ -531,6 +539,37 @@ const PastePreview = () => {
                     )}
                 </div>
             )}
+                {/* Discreet shortcut back to a fresh editor. */}
+                <div
+                    style={{
+                        padding: 5,
+                        background: 'rgba(40, 40, 40, 0.92)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: 8,
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                    }}
+                >
+                    <button
+                        onClick={() => router.push('/')}
+                        title="New"
+                        aria-label="New paste"
+                        style={{
+                            backgroundColor: '#1e1e1e',
+                            color: '#b0b0b0',
+                            border: '1px solid #333',
+                            borderRadius: '4px',
+                            padding: '10px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            transition: 'background-color 0.3s ease',
+                        }}
+                    >
+                        <FiFilePlus size={20} />
+                    </button>
+                </div>
+            </div>
             <div
                 style={{
                     width: '100vw',
