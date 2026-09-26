@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         if (req.method === 'DELETE') {
-            const session = requireSession(req, res);
+            const session = await requireSession(req, res);
             if (!session) return;
 
             const paste = await getPaste(id);
@@ -73,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         if (req.method === 'PATCH') {
-            const session = requireSession(req, res);
+            const session = await requireSession(req, res);
             if (!session) return;
 
             const paste = await getPaste(id);

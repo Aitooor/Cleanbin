@@ -47,6 +47,17 @@ export type PagedResponse<T> = {
     items: T[];
 };
 
+// One signed-in device. `current` marks the session making the request.
+export type DashboardSessionInfo = {
+    id: string;
+    email: string;
+    role: SessionRole;
+    userAgent: string;
+    createdAt: string;
+    lastSeenAt: string;
+    current: boolean;
+};
+
 export type TableColumn<T> = {
     key: string;
     header: ReactNode;

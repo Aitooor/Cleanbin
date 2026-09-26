@@ -14,6 +14,7 @@ import {
     type UserRole,
 } from '../../../utils/users';
 import { deletePasskey } from '../../../utils/passkeys';
+import { revokeUserSessions } from '../../../utils/sessions';
 import { resolveOrigin } from '../../../utils/passkeyRequest';
 import { buildSetupUrl } from '../../../utils/invites';
 import { sendInvitationEmail, sendPasswordResetEmail } from '../../../utils/mailer';
@@ -57,7 +58,7 @@ function sendUserError(res: NextApiResponse, error: unknown): boolean {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-    if (!requireAdmin(req, res)) return;
+    if (!(await requireAdmin(req, res))) return;
 
     const email = firstQueryValue(req.query.email).trim();
     if (!email) {
@@ -100,6 +101,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     const token = await issuePasswordResetToken(email);
                     await disableTotp(email);
                     await deletePasskey(email);
+                    // A reset is how an account is recovered, so every existing
+                    // device must be signed out before the new credentials exist.
+                    await revokeUserSessions(email);
 
                     const url = buildSetupUrl(token, resolveOrigin(req));
                     const delivery = await sendPasswordResetEmail(email, url);
@@ -166,6 +170,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (req.method === 'DELETE') {
             try {
                 await deleteUser(email);
+                // A deleted account must not keep working through a live session.
+                await revokeUserSessions(email);
                 return res.status(200).json({ message: 'User deleted' });
             } catch (error) {
                 if (sendUserError(res, error)) return;

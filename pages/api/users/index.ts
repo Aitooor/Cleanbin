@@ -33,7 +33,7 @@ function parseLimit(value: unknown): number | null {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-    if (!requireAdmin(req, res)) return;
+    if (!(await requireAdmin(req, res))) return;
 
     try {
         if (req.method === 'GET') {

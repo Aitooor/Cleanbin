@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, WebAuthnCredential } from '@simplewebauthn/server';
 import { setSessionCookie } from '../../../../utils/auth';
+import { createUserSession } from '../../../../utils/sessions';
 import {
     consumeChallenge,
     findPasskeyByCredentialId,
@@ -65,7 +66,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const account = await getAccountState(passkey.email);
         const role = account?.role ?? 'user';
-        setSessionCookie(res, passkey.email, role);
+        const session = await createUserSession(passkey.email, role, req.headers['user-agent'] ?? '');
+        setSessionCookie(res, passkey.email, role, session.id);
         return res.status(200).json({ message: 'Login successful', email: passkey.email, role });
     } catch (error) {
         console.error('POST /api/auth/passkey/login error:', error);

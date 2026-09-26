@@ -14,6 +14,7 @@ import {
 } from 'react-icons/fi';
 import DashboardLayout from '../../components/dashboard/DashboardLayout';
 import BulkDeleteModal, { type BulkDeleteRequest } from '../../components/dashboard/BulkDeleteModal';
+import ConfirmModal, { type ConfirmRequest } from '../../components/dashboard/ConfirmModal';
 import {
     Badge,
     Button,
@@ -98,6 +99,7 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
     const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterRule[]>(DEFAULT_ADVANCED_FILTERS);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [deleteRequest, setDeleteRequest] = useState<BulkDeleteRequest | null>(null);
+    const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
     const [editing, setEditing] = useState<EditState | null>(null);
     const [sharing, setSharing] = useState<ShareState | null>(null);
@@ -287,8 +289,7 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
         void postBroadcast({ type: 'pastes_bulk_deleted', ids });
     };
 
-    const handleDeletePaste = async (paste: Paste) => {
-        if (!window.confirm(`Delete "${paste.name || 'this paste'}"? This cannot be undone.`)) return;
+    const performDeletePaste = async (paste: Paste) => {
         const response = await fetch(`/api/paste/${paste.id}`, { method: 'DELETE' });
         if (response.ok) {
             removeIds([paste.id]);
@@ -302,6 +303,19 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
         } else {
             addNotification('Failed to delete paste.');
         }
+    };
+
+    const handleDeletePaste = (paste: Paste) => {
+        setConfirm({
+            title: 'Delete paste',
+            description: `Delete "${paste.name || 'this paste'}"? This cannot be undone.`,
+            confirmLabel: 'Delete paste',
+            tone: 'danger',
+            onConfirm: () => {
+                setConfirm(null);
+                void performDeletePaste(paste);
+            },
+        });
     };
 
     const openEdit = (paste: Paste) => {
@@ -830,6 +844,8 @@ export default function PastesPage({ sessionEmail, sessionRole, permanentDeleteL
                     )}
                 </Modal>
             )}
+
+            {confirm && <ConfirmModal {...confirm} onClose={() => setConfirm(null)} />}
         </DashboardLayout>
     );
 }

@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { setSessionCookie, verifyAuthChallenge } from '../../../utils/auth';
+import { createUserSession } from '../../../utils/sessions';
 import { enableTotp, resolveInviteEmail } from '../../../utils/users';
 
 // Finishes the setup: verifies the TOTP code against the pending secret,
@@ -37,7 +38,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(401).json({ message: 'Invalid verification code' });
         }
 
-        setSessionCookie(res, state.email, state.role);
+        const session = await createUserSession(state.email, state.role, req.headers['user-agent'] ?? '');
+        setSessionCookie(res, state.email, state.role, session.id);
         return res.status(200).json({
             message: 'Two-factor authentication enabled',
             email: state.email,

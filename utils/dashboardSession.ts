@@ -10,9 +10,12 @@ export async function getDashboardSessionProps(
 ): Promise<GetServerSidePropsResult<DashboardSession>> {
     const cookies = context.req.headers.cookie ? parse(context.req.headers.cookie) : {};
     const { verifySessionToken } = await import('./auth');
+    const { isSessionActive } = await import('./sessions');
     const session = verifySessionToken(cookies['auth-token']);
 
-    if (!session) {
+    // Defence in depth: the middleware only proves the signature (Edge cannot
+    // read the session store), so here the durable record must still be active.
+    if (!session || !(await isSessionActive(session.sid))) {
         return { redirect: { destination: '/login', permanent: false } };
     }
 

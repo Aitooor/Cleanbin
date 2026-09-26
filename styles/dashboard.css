@@ -111,6 +111,7 @@
     align-items: center;
     gap: var(--dash-space-1);
     margin-left: auto;
+    min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
 }
@@ -836,6 +837,7 @@
 
 .dash-setup-url .dash-input {
     flex: 1 1 auto;
+    min-width: 0;
 }
 
 .dash-note {
@@ -898,6 +900,87 @@
     cursor: pointer;
 }
 
+/* ---------- Account ---------- */
+.dash-account-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--dash-space-4);
+}
+
+.dash-account-status {
+    display: flex;
+    align-items: center;
+    gap: var(--dash-space-3);
+    flex-wrap: wrap;
+}
+
+.dash-account-status .dash-label {
+    margin: 0;
+}
+
+.dash-account-field {
+    display: flex;
+    align-items: baseline;
+    gap: var(--dash-space-3);
+    flex-wrap: wrap;
+}
+
+.dash-account-field-label {
+    min-width: 120px;
+    color: var(--dash-text-muted);
+    font-size: var(--dash-fs-sm);
+}
+
+.dash-account-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--dash-space-2);
+    flex-wrap: wrap;
+    padding-top: var(--dash-space-1);
+}
+
+.dash-confirm-desc {
+    white-space: pre-line;
+    line-height: 1.6;
+}
+
+.dash-session-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--dash-space-2);
+}
+
+.dash-session-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--dash-space-3);
+    padding: var(--dash-space-3) var(--dash-space-4);
+    border: 1px solid var(--dash-border);
+    border-radius: var(--dash-radius);
+    background: var(--dash-surface-2);
+}
+
+.dash-session-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.dash-session-device {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--dash-space-2);
+    flex-wrap: wrap;
+    color: var(--dash-text);
+}
+
+.dash-session-meta {
+    font-size: var(--dash-fs-xs);
+    color: var(--dash-text-faint);
+}
+
 /* Entry animation, staggered by inline animation-delay. */
 .dash-anim {
     opacity: 0;
@@ -948,10 +1031,44 @@
         order: 3;
         width: 100%;
         margin-left: 0;
+        gap: var(--dash-space-2);
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .dash-nav-link {
+        padding: var(--dash-space-2) var(--dash-space-3);
     }
 
     .dash-topbar-account {
         margin-left: auto;
+    }
+
+    /* Touch targets must stay comfortable on phones. */
+    .dash-icon-btn {
+        width: 40px;
+        height: 40px;
+    }
+
+    .dash-table-wrap {
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .dash-security-action {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .dash-security-action .dash-btn {
+        width: 100%;
+    }
+
+    .dash-session-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .dash-session-row .dash-btn {
+        width: 100%;
     }
 
     .dash-page-title {
@@ -964,6 +1081,28 @@
 
     .dash-stat-value {
         font-size: var(--dash-fs-xl);
+    }
+}
+
+@media (max-width: 420px) {
+    .dash-card {
+        padding: var(--dash-space-4);
+    }
+
+    .dash-modal-backdrop {
+        padding: var(--dash-space-2);
+    }
+
+    .dash-modal {
+        padding: var(--dash-space-4);
+    }
+
+    .dash-account-field-label {
+        min-width: 0;
+    }
+
+    .dash-brand {
+        font-size: var(--dash-fs-md);
     }
 }
 

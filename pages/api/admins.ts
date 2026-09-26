@@ -43,7 +43,7 @@ function sendUserError(res: NextApiResponse, error: unknown): boolean {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Admin management requires a valid session with the admin role, for every method.
-    if (!requireAdmin(req, res)) return;
+    if (!(await requireAdmin(req, res))) return;
 
     try {
         if (req.method === 'GET') {

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { parse as parseCookies, serialize } from 'cookie';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { verifyUserCredentials, type UserRole } from './users';
+import { isSessionActive, touchSession } from './sessions';
 
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 
@@ -10,6 +11,10 @@ export type SessionRole = UserRole;
 export interface SessionPayload {
     email: string;
     role: SessionRole;
+    // Identifies the durable session record in DATA_DIR/sessions.json. The
+    // middleware cannot check it (Edge has no filesystem), so revocation is
+    // enforced by requireSession and the dashboard's server-side guard.
+    sid: string;
     exp: number;
 }
 
@@ -74,10 +79,11 @@ function verifySignedPayload(token: string | undefined | null): string | null {
     return encodedPayload;
 }
 
-export function createSessionToken(email: string, role: SessionRole = 'admin'): string {
+export function createSessionToken(email: string, role: SessionRole, sid: string): string {
     const payload: SessionPayload = {
         email,
         role,
+        sid,
         exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
     };
     const encodedPayload = toBase64Url(JSON.stringify(payload));
@@ -94,7 +100,7 @@ export function verifySessionToken(token: string | undefined | null): SessionPay
     } catch {
         return null;
     }
-    if (!payload || typeof payload.exp !== 'number') return null;
+    if (!payload || typeof payload.exp !== 'number' || typeof payload.sid !== 'string') return null;
     if (payload.exp < Math.floor(Date.now() / 1000)) return null;
     return payload;
 }
@@ -142,9 +148,10 @@ export function verifyAuthChallenge(
 }
 
 // Issues the signed session cookie. Shared by every successful login path so
-// cookie flags stay consistent in one place.
-export function setSessionCookie(res: NextApiResponse, email: string, role: SessionRole): void {
-    const token = createSessionToken(email, role);
+// cookie flags stay consistent in one place. `sid` points at the durable
+// session record; without it the token is refused.
+export function setSessionCookie(res: NextApiResponse, email: string, role: SessionRole, sid: string): void {
+    const token = createSessionToken(email, role, sid);
     res.setHeader(
         'Set-Cookie',
         serialize(SESSION_COOKIE_NAME, token, {
@@ -164,17 +171,34 @@ export function getSessionFromRequest(req: NextApiRequest): SessionPayload | nul
     return verifySessionToken(token);
 }
 
-export function requireSession(req: NextApiRequest, res: NextApiResponse): SessionPayload | null {
+// Expires the session cookie client-side after a sign-out.
+export function clearSessionCookie(res: NextApiResponse): void {
+    res.setHeader(
+        'Set-Cookie',
+        serialize(SESSION_COOKIE_NAME, '', {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'lax',
+            path: '/',
+            maxAge: 0,
+        })
+    );
+}
+
+// Verifies the signature AND that the session record still exists and is not
+// revoked. A valid signature over a revoked/unknown sid is rejected.
+export async function requireSession(req: NextApiRequest, res: NextApiResponse): Promise<SessionPayload | null> {
     const session = getSessionFromRequest(req);
-    if (!session) {
+    if (!session || !(await isSessionActive(session.sid))) {
         res.status(401).json({ error: 'Unauthorized' });
         return null;
     }
+    await touchSession(session.sid);
     return session;
 }
 
-export function requireAdmin(req: NextApiRequest, res: NextApiResponse): SessionPayload | null {
-    const session = requireSession(req, res);
+export async function requireAdmin(req: NextApiRequest, res: NextApiResponse): Promise<SessionPayload | null> {
+    const session = await requireSession(req, res);
     if (!session) return null;
     if (session.role !== 'admin') {
         res.status(403).json({ error: 'Forbidden' });

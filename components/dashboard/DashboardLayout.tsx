@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { FiFileText, FiGrid, FiLogOut, FiUser, FiUsers } from 'react-icons/fi';
 import { Badge, IconButton } from './ui';
 import type { DashboardSession } from './types';
+import { clearAuthCookie, revokeCurrentSession } from './clientSession';
 
 type NavItem = {
     href: string;
@@ -33,9 +34,9 @@ export default function DashboardLayout({ sessionEmail, sessionRole, children }:
     const isAdmin = sessionRole === 'admin';
     const navItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
 
-    const handleLogout = () => {
-        localStorage.removeItem('authToken');
-        document.cookie = 'auth-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;';
+    const handleLogout = async () => {
+        await revokeCurrentSession();
+        clearAuthCookie();
         router.push('/login');
     };
 

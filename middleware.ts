@@ -18,6 +18,10 @@ function base64UrlToBytes(input: string): Uint8Array<ArrayBuffer> {
 
 // Edge runtime verification of the HMAC-SHA256 session token. Mirrors
 // utils/auth.ts verifySessionToken but uses Web Crypto (no node:crypto).
+// It deliberately checks the signature and expiry only: the Edge runtime has no
+// filesystem, so it cannot consult DATA_DIR/sessions.json. Revocation of a
+// specific session is enforced where the data lives, by requireSession (API
+// routes) and getDashboardSessionProps (dashboard pages).
 async function isSessionTokenValid(token: string | undefined): Promise<boolean> {
   const secret = process.env.AUTH_SECRET;
   if (!secret || !token) return false;

@@ -14,6 +14,7 @@ import {
     FiUsers,
 } from 'react-icons/fi';
 import DashboardLayout from '../../components/dashboard/DashboardLayout';
+import ConfirmModal, { type ConfirmRequest } from '../../components/dashboard/ConfirmModal';
 import {
     Badge,
     Button,
@@ -87,6 +88,7 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
     const [editForm, setEditForm] = useState<EditUserForm>({ role: 'user', permanentDeleteLimit: '0', password: '' });
     const [editBusy, setEditBusy] = useState(false);
     const [resetUrl, setResetUrl] = useState<string | null>(null);
+    const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
     const fetchUsers = useCallback(async (): Promise<DashboardUser[]> => {
         if (!isAdmin) {
@@ -231,9 +233,7 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
         }
     };
 
-    const handleResetTotp = async (user: DashboardUser) => {
-        if (busy) return;
-        if (!window.confirm(`Reset two-factor authentication for ${user.email}? They will set it up again on the next login.`)) return;
+    const performResetTotp = async (user: DashboardUser) => {
         setBusy(true);
         try {
             const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, {
@@ -255,9 +255,21 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
         }
     };
 
-    const handleRemovePasskey = async (user: DashboardUser) => {
+    const handleResetTotp = (user: DashboardUser) => {
         if (busy) return;
-        if (!window.confirm(`Remove the passkey for ${user.email}? Password sign in will work again.`)) return;
+        setConfirm({
+            title: 'Reset 2FA',
+            description: `Reset two-factor authentication for ${user.email}? They will set it up again on the next login.`,
+            confirmLabel: 'Reset 2FA',
+            tone: 'warning',
+            onConfirm: () => {
+                setConfirm(null);
+                void performResetTotp(user);
+            },
+        });
+    };
+
+    const performRemovePasskey = async (user: DashboardUser) => {
         setBusy(true);
         try {
             const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, {
@@ -279,15 +291,21 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
         }
     };
 
-    const handleSendPasswordReset = async (user: DashboardUser) => {
+    const handleRemovePasskey = (user: DashboardUser) => {
         if (busy) return;
-        if (
-            !window.confirm(
-                `Send a password reset to ${user.email}? This disables their 2FA and passkey and emails a setup link.`
-            )
-        ) {
-            return;
-        }
+        setConfirm({
+            title: 'Remove passkey',
+            description: `Remove the passkey for ${user.email}? Password sign in will work again.`,
+            confirmLabel: 'Remove passkey',
+            tone: 'danger',
+            onConfirm: () => {
+                setConfirm(null);
+                void performRemovePasskey(user);
+            },
+        });
+    };
+
+    const performSendPasswordReset = async (user: DashboardUser) => {
         setBusy(true);
         try {
             const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, {
@@ -315,9 +333,21 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
         }
     };
 
-    const handleDelete = async (user: DashboardUser) => {
+    const handleSendPasswordReset = (user: DashboardUser) => {
         if (busy) return;
-        if (!window.confirm(`Delete the account ${user.email}?`)) return;
+        setConfirm({
+            title: 'Send password reset',
+            description: `Send a password reset to ${user.email}? This disables their 2FA and passkey and emails a setup link.`,
+            confirmLabel: 'Send password reset',
+            tone: 'warning',
+            onConfirm: () => {
+                setConfirm(null);
+                void performSendPasswordReset(user);
+            },
+        });
+    };
+
+    const performDelete = async (user: DashboardUser) => {
         setBusy(true);
         try {
             const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, { method: 'DELETE' });
@@ -334,6 +364,20 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
         } finally {
             setBusy(false);
         }
+    };
+
+    const handleDelete = (user: DashboardUser) => {
+        if (busy) return;
+        setConfirm({
+            title: 'Delete account',
+            description: `Delete the account ${user.email}?`,
+            confirmLabel: 'Delete account',
+            tone: 'danger',
+            onConfirm: () => {
+                setConfirm(null);
+                void performDelete(user);
+            },
+        });
     };
 
     const copySetupUrl = () => {
@@ -594,6 +638,8 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
                     </div>
                 </Modal>
             )}
+
+            {confirm && <ConfirmModal {...confirm} busy={busy} onClose={() => setConfirm(null)} />}
         </DashboardLayout>
     );
 }

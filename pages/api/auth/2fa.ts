@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { setSessionCookie, verifyAuthChallenge } from '../../../utils/auth';
+import { createUserSession } from '../../../utils/sessions';
 import { getAccountState, getEnabledTotpSecret } from '../../../utils/users';
 import { verifyTotp } from '../../../utils/totp';
 
@@ -32,7 +33,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(401).json({ message: 'Invalid verification code' });
         }
 
-        setSessionCookie(res, account.email, account.role);
+        const session = await createUserSession(account.email, account.role, req.headers['user-agent'] ?? '');
+        setSessionCookie(res, account.email, account.role, session.id);
         return res.status(200).json({ message: 'Login successful', email: account.email, role: account.role });
     } catch (error) {
         console.error('POST /api/auth/2fa error:', error);

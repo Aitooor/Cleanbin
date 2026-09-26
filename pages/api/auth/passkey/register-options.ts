@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(405).json({ message: `Method ${req.method} Not Allowed` });
         }
 
-        const session = requireSession(req, res);
+        const session = await requireSession(req, res);
         if (!session) return;
 
         const rpID = resolveRpID(req);

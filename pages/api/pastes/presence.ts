@@ -19,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-        const session = requireSession(req, res);
+        const session = await requireSession(req, res);
         if (!session) return;
 
         const rawIds = ((req.query.ids as string) || '')

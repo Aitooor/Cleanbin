@@ -82,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       // The listing is private: without a session the API must not expose other
       // people's pastes (nor their content).
-      if (!requireSession(req, res)) return;
+      if (!(await requireSession(req, res))) return;
       const viewer = getSessionFromRequest(req);
       const scope = resolveScope((req.query.scope as string) || undefined, viewer);
       const force = req.query.force === '1';
@@ -191,7 +191,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     try {
       // Destructive operation: a valid session is always required.
-      const session = requireSession(req, res);
+      const session = await requireSession(req, res);
       if (!session) return;
 
       // Accept JSON body with { ids?: string[], type?, filter?, filterRules?, confirm?: boolean }
