@@ -437,7 +437,8 @@
 }
 
 .dash-input,
-.dash-select {
+.dash-select,
+.dash-textarea {
     width: 100%;
     margin: 0;
     padding: var(--dash-space-2) var(--dash-space-3);
@@ -450,6 +451,34 @@
     transition: border-color var(--dash-t) ease, box-shadow var(--dash-t) ease;
 }
 
+.dash-textarea {
+    min-height: 240px;
+    line-height: 1.6;
+    resize: vertical;
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+.dash-presence-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--dash-warning);
+    box-shadow: 0 0 0 3px var(--dash-warning-soft);
+    animation: dash-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes dash-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.35;
+    }
+}
+
 .dash-select {
     cursor: pointer;
 }
@@ -459,7 +488,8 @@
 }
 
 .dash-input:focus,
-.dash-select:focus {
+.dash-select:focus,
+.dash-textarea:focus {
     outline: none;
     border-color: var(--dash-accent);
     box-shadow: 0 0 0 3px var(--dash-accent-soft);

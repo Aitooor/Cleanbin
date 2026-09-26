@@ -125,6 +125,19 @@ export function Input({ label, className = '', ...rest }: InputProps) {
     );
 }
 
+type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & { label?: string };
+
+export function Textarea({ label, className = '', ...rest }: TextareaProps) {
+    const field = <textarea className={`dash-textarea ${className}`.trim()} {...rest} />;
+    if (!label) return field;
+    return (
+        <label className="dash-field">
+            <span className="dash-label">{label}</span>
+            {field}
+        </label>
+    );
+}
+
 type SelectProps = React.SelectHTMLAttributes<HTMLSelectElement> & { label?: string };
 
 export function Select({ label, className = '', children, ...rest }: SelectProps) {
@@ -168,7 +181,9 @@ export function Table<T>({
     empty = null,
     compact = false,
 }: TableProps<T>) {
-    if (loading) return <LoadingState label={loadingLabel} />;
+    // Only replace the table with the loading state on the first load. Refreshes
+    // keep the current rows visible instead of flashing the loading label.
+    if (loading && rows.length === 0) return <LoadingState label={loadingLabel} />;
     if (rows.length === 0) return <>{empty}</>;
 
     return (

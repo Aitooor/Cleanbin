@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, ReactNode, useRef, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
 
 type NotificationContextType = {
     addNotification: (message: string) => void;
@@ -18,32 +18,42 @@ type Notification = {
     paused: boolean; // Indica si la notificación está pausada
 };
 
+const NOTIFICATION_DURATION = 5000; // 5 segundos por defecto
+const PROGRESS_TICK = 100; // Actualiza cada 100ms para suavizar la barra
+
 export const NotificationProvider: React.FC<NotificationProviderProps> = ({ children }) => {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const timers = useRef<{ [key: number]: NodeJS.Timeout }>({}); // Referencia para manejar los temporizadores
 
-    const addNotification = (message: string) => {
-        const id = Date.now();
-        const newNotification: Notification = {
-            id,
-            message,
-            remainingTime: 5000, // 5 segundos por defecto
-            startTime: Date.now(),
-            paused: false,
-        };
-        setNotifications((prev) => [...prev, newNotification]);
-
-        // Configura el temporizador para eliminar la notificación
-        timers.current[id] = setTimeout(() => {
-            removeNotification(id);
-        }, 5000);
-    };
-
-    const removeNotification = (id: number) => {
+    // Stable identity so consumers can safely list it in effect deps.
+    const removeNotification = useCallback((id: number) => {
         setNotifications((prev) => prev.filter((notification) => notification.id !== id));
-        clearTimeout(timers.current[id]);
-        delete timers.current[id];
-    };
+        const timer = timers.current[id];
+        if (timer) {
+            clearTimeout(timer);
+            delete timers.current[id];
+        }
+    }, []);
+
+    const addNotification = useCallback(
+        (message: string) => {
+            const id = Date.now();
+            const newNotification: Notification = {
+                id,
+                message,
+                remainingTime: NOTIFICATION_DURATION,
+                startTime: Date.now(),
+                paused: false,
+            };
+            setNotifications((prev) => [...prev, newNotification]);
+
+            // Configura el temporizador para eliminar la notificación
+            timers.current[id] = setTimeout(() => {
+                removeNotification(id);
+            }, NOTIFICATION_DURATION);
+        },
+        [removeNotification]
+    );
 
     const handleMouseEnter = (id: number) => {
         setNotifications((prev) =>
@@ -81,7 +91,14 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
         }
     };
 
+    // The interval only runs while a notification is actually counting down, so
+    // an idle provider never schedules a timer (which used to re-render the whole
+    // tree every 100ms). The boolean keeps the effect from restarting on each tick.
+    const hasActiveNotification = notifications.some((notification) => !notification.paused && notification.remainingTime > 0);
+
     useEffect(() => {
+        if (!hasActiveNotification) return;
+
         const updateProgress = () => {
             setNotifications((prev) =>
                 prev.map((n) =>
@@ -89,18 +106,20 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
                         ? n // Si está pausado, no actualiza el tiempo restante
                         : {
                               ...n,
-                              remainingTime: Math.max(0, n.remainingTime - 100), // Reduce el tiempo restante cada 100ms
+                              remainingTime: Math.max(0, n.remainingTime - PROGRESS_TICK), // Reduce el tiempo restante cada 100ms
                           }
                 )
             );
         };
 
-        const interval = setInterval(updateProgress, 100); // Actualiza cada 100ms para suavizar la barra
-        return () => clearInterval(interval); // Limpia el intervalo al desmontar
-    }, []);
+        const interval = setInterval(updateProgress, PROGRESS_TICK);
+        return () => clearInterval(interval); // Limpia el intervalo al desmontar o al no quedar notificaciones activas
+    }, [hasActiveNotification]);
+
+    const contextValue = useMemo(() => ({ addNotification }), [addNotification]);
 
     return (
-        <NotificationContext.Provider value={{ addNotification }}>
+        <NotificationContext.Provider value={contextValue}>
             {children}
             <div
                 style={{

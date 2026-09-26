@@ -474,13 +474,12 @@ const PastePreview = () => {
                 flexDirection: 'column',
             }}
         >
-            {/* Single discreet card: expiry, name and the new-paste shortcut. */}
+            {/* Single discreet card: expiry, name and the new-paste shortcut.
+                It sits in the flow (not floating) so the paste never renders underneath it. */}
             <div
                 style={{
-                    position: 'fixed',
-                    top: 12,
-                    right: 12,
-                    zIndex: 10,
+                    alignSelf: 'flex-end',
+                    margin: '12px 12px 0 12px',
                     maxWidth: 240,
                     padding: 8,
                     background: 'rgba(40, 40, 40, 0.92)',
@@ -491,6 +490,7 @@ const PastePreview = () => {
                     flexDirection: 'column',
                     alignItems: 'flex-end',
                     gap: 6,
+                    flexShrink: 0,
                 }}
             >
                 {!permanent && timeLeftLabel && (
@@ -569,9 +569,9 @@ const PastePreview = () => {
                 <pre
                     style={{
                         width: '100vw',
-                        height: 'calc(100vh - 40px)',
+                        height: '100%',
                         margin: 0,
-                        padding: '18px 8vw 18px 8vw',
+                        padding: '10px 8vw 18px 8vw',
                         fontSize: 'clamp(11px, 2vw, 15px)',
                         lineHeight: 1.8,
                         fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
@@ -583,6 +583,9 @@ const PastePreview = () => {
                         outline: 'none',
                         border: 'none',
                         letterSpacing: 0.01,
+                        // Long lines must wrap instead of running off the screen.
+                        whiteSpace: 'pre-wrap',
+                        overflowWrap: 'anywhere',
                     }}
                 >
                     {renderCode()}

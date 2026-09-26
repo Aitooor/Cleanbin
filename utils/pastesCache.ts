@@ -1,7 +1,18 @@
 import config from './config';
 import { deleteExpiredPastes, getAllPastes, getPastes } from './db';
 
-type Paste = { id: string; content: string; name?: string; permanent?: any; createdAt: string; expiresAt?: string };
+type Paste = {
+  id: string;
+  content: string;
+  name?: string;
+  permanent?: any;
+  createdAt: string;
+  expiresAt?: string;
+  owner?: string | null;
+  sharedWith?: string[];
+  version?: number;
+  updatedAt?: string;
+};
 
 let cached: { ts: number; total: number; items: Paste[] } | null = null;
 let started = false;
@@ -55,17 +66,21 @@ export function removePasteFromCache(id: string) {
   }
 }
 
-export function updatePasteNameInCache(id: string, name: string) {
+export function updatePasteInCache(id: string, patch: Partial<Paste>) {
   if (!cached) return;
   let changed = false;
   cached.items = cached.items.map((p) => {
     if (p.id === id) {
       changed = true;
-      return { ...p, name };
+      return { ...p, ...patch };
     }
     return p;
   });
   if (changed) cached.ts = Date.now();
+}
+
+export function updatePasteNameInCache(id: string, name: string) {
+  updatePasteInCache(id, { name });
 }
 
 export function startPrecache() {

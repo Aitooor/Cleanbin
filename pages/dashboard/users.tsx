@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { GetServerSideProps } from 'next';
-import { FiClipboard, FiEdit2, FiRefreshCw, FiShield, FiTrash2, FiUserPlus, FiUsers } from 'react-icons/fi';
+import { FiClipboard, FiEdit2, FiRefreshCw, FiSave, FiShield, FiTrash2, FiUserPlus, FiUsers } from 'react-icons/fi';
 import DashboardLayout from '../../components/dashboard/DashboardLayout';
 import {
     Badge,
@@ -10,6 +10,7 @@ import {
     IconButton,
     Input,
     LoadingState,
+    Modal,
     PageHeader,
     Select,
     Table,
@@ -19,13 +20,19 @@ import { formatDate } from '../../components/dashboard/format';
 import { getDashboardSessionProps } from '../../utils/dashboardSession';
 import { useNotification } from '../../components/NotificationProvider';
 
-type UserFormState = {
+type CreateUserForm = {
     email: string;
     role: SessionRole;
     permanentDeleteLimit: string;
 };
 
-const EMPTY_USER_FORM: UserFormState = { email: '', role: 'user', permanentDeleteLimit: '2' };
+type EditUserForm = {
+    role: SessionRole;
+    permanentDeleteLimit: string;
+    password: string;
+};
+
+const EMPTY_CREATE_FORM: CreateUserForm = { email: '', role: 'user', permanentDeleteLimit: '2' };
 
 export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLimit }: DashboardSession) {
     const { addNotification } = useNotification();
@@ -33,10 +40,13 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
 
     const [users, setUsers] = useState<DashboardUser[]>([]);
     const [loading, setLoading] = useState(true);
-    const [form, setForm] = useState<UserFormState>(EMPTY_USER_FORM);
-    const [editingEmail, setEditingEmail] = useState<string | null>(null);
+    const [form, setForm] = useState<CreateUserForm>(EMPTY_CREATE_FORM);
     const [busy, setBusy] = useState(false);
     const [setupUrl, setSetupUrl] = useState<string | null>(null);
+
+    const [editTarget, setEditTarget] = useState<DashboardUser | null>(null);
+    const [editForm, setEditForm] = useState<EditUserForm>({ role: 'user', permanentDeleteLimit: '0', password: '' });
+    const [editBusy, setEditBusy] = useState(false);
 
     const fetchUsers = useCallback(async () => {
         if (!isAdmin) {
@@ -59,48 +69,20 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
         void fetchUsers();
     }, [fetchUsers]);
 
-    const resetForm = () => {
-        setEditingEmail(null);
-        setForm(EMPTY_USER_FORM);
-    };
-
-    const handleEdit = (user: DashboardUser) => {
-        setEditingEmail(user.email);
-        setSetupUrl(null);
-        setForm({ email: user.email, role: user.role, permanentDeleteLimit: String(user.permanentDeleteLimit) });
-    };
-
-    const handleSubmit = async () => {
+    const handleCreate = async () => {
         if (busy) return;
         const limit = Number(form.permanentDeleteLimit);
         if (!Number.isInteger(limit) || limit < 0) {
             addNotification('Limit must be an integer greater than or equal to 0.');
             return;
         }
-        if (!editingEmail && !/\S+@\S+\.\S+/.test(form.email.trim())) {
+        if (!/\S+@\S+\.\S+/.test(form.email.trim())) {
             addNotification('Please enter a valid email.');
             return;
         }
 
         setBusy(true);
         try {
-            if (editingEmail) {
-                const response = await fetch(`/api/users/${encodeURIComponent(editingEmail)}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ role: form.role, permanentDeleteLimit: limit }),
-                });
-                if (response.ok) {
-                    addNotification('User updated.');
-                    resetForm();
-                    await fetchUsers();
-                } else {
-                    const data = await response.json().catch(() => ({}));
-                    addNotification(data.message || 'Failed to update user.');
-                }
-                return;
-            }
-
             const response = await fetch('/api/users', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -108,7 +90,7 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
             });
             if (response.status === 201) {
                 const data = await response.json().catch(() => ({}));
-                setForm(EMPTY_USER_FORM);
+                setForm(EMPTY_CREATE_FORM);
                 if (data.setupUrl) {
                     setSetupUrl(data.setupUrl);
                     addNotification('Invitation created, but the email could not be sent. Copy the setup link.');
@@ -125,6 +107,48 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
             addNotification('Request failed.');
         } finally {
             setBusy(false);
+        }
+    };
+
+    const handleEdit = (user: DashboardUser) => {
+        setEditTarget(user);
+        setEditForm({ role: user.role, permanentDeleteLimit: String(user.permanentDeleteLimit), password: '' });
+    };
+
+    const handleSaveEdit = async () => {
+        if (!editTarget || editBusy) return;
+        const limit = Number(editForm.permanentDeleteLimit);
+        if (!Number.isInteger(limit) || limit < 0) {
+            addNotification('Limit must be an integer greater than or equal to 0.');
+            return;
+        }
+        if (editForm.password && editForm.password.length < 8) {
+            addNotification('Password must be at least 8 characters.');
+            return;
+        }
+
+        const patch: Record<string, unknown> = { role: editForm.role, permanentDeleteLimit: limit };
+        if (editForm.password) patch.password = editForm.password;
+
+        setEditBusy(true);
+        try {
+            const response = await fetch(`/api/users/${encodeURIComponent(editTarget.email)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            });
+            if (response.ok) {
+                addNotification('User updated.');
+                setEditTarget(null);
+                await fetchUsers();
+            } else {
+                const data = await response.json().catch(() => ({}));
+                addNotification(data.message || 'Failed to update user.');
+            }
+        } catch {
+            addNotification('Request failed.');
+        } finally {
+            setEditBusy(false);
         }
     };
 
@@ -188,7 +212,7 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
             const response = await fetch(`/api/users/${encodeURIComponent(user.email)}`, { method: 'DELETE' });
             if (response.ok) {
                 addNotification('User deleted.');
-                if (editingEmail === user.email) resetForm();
+                if (editTarget?.email === user.email) setEditTarget(null);
                 await fetchUsers();
             } else {
                 const data = await response.json().catch(() => ({}));
@@ -281,7 +305,7 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
             <PageHeader title="Users" description="Invite teammates and control their access and permanent-delete limit." />
 
             <Card
-                title={editingEmail ? `Edit ${editingEmail}` : 'Invite a user'}
+                title="Invite a user"
                 description="New accounts are invitations: the person sets their password and enables 2FA from the setup link."
                 animationDelay={0}
             >
@@ -292,7 +316,6 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
                         placeholder="name@example.com"
                         value={form.email}
                         onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
-                        disabled={!!editingEmail}
                         style={{ minWidth: 220 }}
                     />
                     <Select
@@ -310,19 +333,9 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
                         value={form.permanentDeleteLimit}
                         onChange={(event) => setForm((prev) => ({ ...prev, permanentDeleteLimit: event.target.value }))}
                     />
-                    <Button
-                        variant="primary"
-                        icon={<FiUserPlus />}
-                        onClick={() => void handleSubmit()}
-                        disabled={busy}
-                    >
-                        {editingEmail ? 'Save' : 'Create'}
+                    <Button variant="primary" icon={<FiUserPlus />} onClick={() => void handleCreate()} disabled={busy}>
+                        Create
                     </Button>
-                    {editingEmail && (
-                        <Button variant="ghost" onClick={resetForm} disabled={busy}>
-                            Cancel
-                        </Button>
-                    )}
                 </div>
 
                 {setupUrl && (
@@ -345,6 +358,49 @@ export default function UsersPage({ sessionEmail, sessionRole, permanentDeleteLi
                     empty={<EmptyState icon={<FiUsers size={26} />} title="No users" description="Invite your first teammate above." />}
                 />
             </Card>
+
+            {editTarget && (
+                <Modal
+                    title={`Edit ${editTarget.email}`}
+                    onClose={() => setEditTarget(null)}
+                    footer={
+                        <>
+                            <Button variant="ghost" onClick={() => setEditTarget(null)}>
+                                Cancel
+                            </Button>
+                            <Button variant="primary" icon={<FiSave />} disabled={editBusy} onClick={() => void handleSaveEdit()}>
+                                {editBusy ? 'Saving...' : 'Save'}
+                            </Button>
+                        </>
+                    }
+                >
+                    <div className="dash-stack">
+                        <Select
+                            label="Role"
+                            value={editForm.role}
+                            onChange={(event) => setEditForm((prev) => ({ ...prev, role: event.target.value as SessionRole }))}
+                        >
+                            <option value="user">user</option>
+                            <option value="admin">admin</option>
+                        </Select>
+                        <Input
+                            label="Permanent delete limit"
+                            type="number"
+                            min={0}
+                            value={editForm.permanentDeleteLimit}
+                            onChange={(event) => setEditForm((prev) => ({ ...prev, permanentDeleteLimit: event.target.value }))}
+                        />
+                        <Input
+                            label="New password (optional)"
+                            type="password"
+                            autoComplete="new-password"
+                            placeholder="Leave blank to keep the current password"
+                            value={editForm.password}
+                            onChange={(event) => setEditForm((prev) => ({ ...prev, password: event.target.value }))}
+                        />
+                    </div>
+                </Modal>
+            )}
         </DashboardLayout>
     );
 }

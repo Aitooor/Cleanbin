@@ -64,14 +64,52 @@ if (typeof window === 'undefined') {
   pathModule = require('path');
 }
 
-type Paste = {
+export type Paste = {
   id: string;
   content: string;
   name?: string;
   permanent?: boolean | string;
   createdAt: string;
   expiresAt?: string;
+  // Ownership model: `owner` is the lowercased email of the creator (null for
+  // anonymous pastes) and `sharedWith` lists collaborators granted edit access.
+  owner?: string | null;
+  sharedWith?: string[];
+  // Monotonic counter used for optimistic concurrency; `updatedAt` is its
+  // human-readable companion.
+  version?: number;
+  updatedAt?: string;
 };
+
+// Fields a caller may change through updatePaste. `expectedVersion` enables
+// optimistic concurrency: when it does not match the stored version the write
+// is rejected with the current state so the client can reconcile.
+export type UpdatePastePatch = {
+  name?: string;
+  content?: string;
+  owner?: string | null;
+  sharedWith?: string[];
+  expectedVersion?: number;
+};
+
+export type UpdatePasteResult =
+  | { status: 'ok'; paste: Paste }
+  | { status: 'not_found' }
+  | { status: 'conflict'; paste: Paste };
+
+// Applies the mutable fields of a patch and bumps the optimistic-concurrency
+// version. Kept pure (returns a new object) so both storage backends share it.
+function applyPastePatch(paste: Paste, patch: UpdatePastePatch): Paste {
+  const next: Paste = { ...paste };
+  if (patch.name !== undefined) next.name = patch.name;
+  if (patch.content !== undefined) next.content = patch.content;
+  if (patch.owner !== undefined) next.owner = patch.owner;
+  if (patch.sharedWith !== undefined) next.sharedWith = patch.sharedWith;
+  const currentVersion = typeof paste.version === 'number' ? paste.version : 0;
+  next.version = currentVersion + 1;
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
 
 // Cache abstraction (minimal): in-memory, Redis and Cassandra placeholders
 interface CacheBackend {
@@ -250,10 +288,13 @@ const cache = createCache();
 
 // Database abstraction
 interface DatabaseBackend {
-  savePaste(id: string, content: string, name: string, permanent: boolean): Promise<string>;
+  savePaste(id: string, content: string, name: string, permanent: boolean, owner?: string | null): Promise<string>;
   getPaste(id: string): Promise<Paste | null>;
   deletePaste(id: string): Promise<void>;
   updatePasteName(id: string, newName: string): Promise<Paste | null>;
+  // Optional: backends that support the full ownership-aware update (JSON and
+  // SQLite) implement it; others fall back to updatePasteName.
+  updatePaste?(id: string, patch: UpdatePastePatch): Promise<UpdatePasteResult>;
   deleteExpiredPastes(): Promise<void>;
   getAllPastes(): Promise<Paste[]>;
   // efficient pagination: return total, items and optional nextPageToken (for cassandra)
@@ -293,16 +334,21 @@ class JsonDatabase implements DatabaseBackend {
     const pageItems = items.slice(start, start + limit);
     return { total, items: pageItems, nextPageToken: null };
   }
-  async savePaste(id: string, content: string, name: string, permanent: boolean) {
+  async savePaste(id: string, content: string, name: string, permanent: boolean, owner: string | null = null) {
     this.ensureServer();
     const filePath = this.getFilePath(id);
     const expirationDays = parseInt(process.env.PASTE_EXPIRATION_DAYS || '30');
+    const createdAt = new Date().toISOString();
     const data: Paste = {
       id,
       content,
       name,
       permanent: permanent ? 'true' : 'false',
-      createdAt: new Date().toISOString(),
+      createdAt,
+      owner,
+      sharedWith: [],
+      version: 1,
+      updatedAt: createdAt,
       ...(permanent ? {} : {
         expiresAt: new Date(
           Date.now() + (expirationDays * 24 * 60 * 60 * 1000)
@@ -384,6 +430,30 @@ class JsonDatabase implements DatabaseBackend {
       if (err.code === 'ENOENT') return null;
       throw err;
     }
+  }
+  async updatePaste(id: string, patch: UpdatePastePatch): Promise<UpdatePasteResult> {
+    this.ensureServer();
+    const filePath = this.getFilePath(id);
+    let data: Paste;
+    try {
+      const fileBuffer = await fs!.readFile(filePath);
+      const decompressed = await decompressBuffer(fileBuffer);
+      data = JSON.parse(decompressed.toString('utf-8')) as Paste;
+    } catch (err: any) {
+      if (err.code === 'ENOENT') return { status: 'not_found' };
+      throw err;
+    }
+
+    const currentVersion = typeof data.version === 'number' ? data.version : 0;
+    if (patch.expectedVersion !== undefined && patch.expectedVersion !== currentVersion) {
+      return { status: 'conflict', paste: data };
+    }
+
+    const next = applyPastePatch(data, patch);
+    const compressed = await compressBuffer(Buffer.from(JSON.stringify(next)));
+    await writeFileAtomic(fs!, filePath, compressed);
+    await cache.set(`paste_${id}`, next);
+    return { status: 'ok', paste: next };
   }
   async deleteExpiredPastes() {
     this.ensureServer();
@@ -476,6 +546,37 @@ function createDatabase(): DatabaseBackend {
         db.exec('ALTER TABLE pastes ADD COLUMN expires_at INTEGER');
       }
 
+      // Ownership columns. `owner` is the lowercased creator email (NULL means
+      // anonymous) and `shared_with` holds a JSON array of collaborator emails.
+      if (!columns.some((column: any) => column.name === 'owner')) {
+        db.exec('ALTER TABLE pastes ADD COLUMN owner TEXT');
+      }
+      if (!columns.some((column: any) => column.name === 'shared_with')) {
+        db.exec('ALTER TABLE pastes ADD COLUMN shared_with TEXT');
+      }
+
+      // One-time backfill: rows written before ownership existed keep their
+      // owner in the compressed payload. Old anonymous pastes stay owner NULL.
+      const ownershipBackfilled = db.prepare("SELECT value FROM schema_meta WHERE key = 'ownership_backfill'").get();
+      if (!ownershipBackfilled) {
+        const legacyRows = db.prepare('SELECT id, payload FROM pastes WHERE owner IS NULL').all();
+        const setOwnership = db.prepare('UPDATE pastes SET owner = ?, shared_with = ? WHERE id = ?');
+        const backfill = db.transaction(() => {
+          for (const row of legacyRows) {
+            try {
+              const parsed = JSON.parse(decompressBufferSync(Buffer.from(row.payload, 'base64')).toString('utf-8'));
+              const owner = typeof parsed.owner === 'string' && parsed.owner ? parsed.owner : null;
+              const sharedWith = Array.isArray(parsed.sharedWith) ? JSON.stringify(parsed.sharedWith) : JSON.stringify([]);
+              if (owner) setOwnership.run(owner, sharedWith, row.id);
+            } catch {
+              // Skip rows that cannot be decoded.
+            }
+          }
+        });
+        backfill();
+        db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('ownership_backfill', '1')").run();
+      }
+
       // One-time backfill for rows created before expires_at existed.
       const backfilled = db.prepare("SELECT value FROM schema_meta WHERE key = 'expires_at_backfill'").get();
       if (!backfilled) {
@@ -503,21 +604,28 @@ function createDatabase(): DatabaseBackend {
         new Date(Date.now() + expirationDays() * 24 * 60 * 60 * 1000).toISOString();
 
       return {
-        savePaste: async (id: string, content: string, name: string, permanent: boolean) => {
+        savePaste: async (id: string, content: string, name: string, permanent: boolean, owner: string | null = null) => {
           const expiresAt = permanent ? null : computeExpiresAt();
-          const obj = {
+          const createdAt = new Date().toISOString();
+          const obj: Paste = {
             id,
             content,
             name,
             permanent,
-            createdAt: new Date().toISOString(),
+            createdAt,
+            owner,
+            sharedWith: [],
+            version: 1,
+            updatedAt: createdAt,
             ...(expiresAt ? { expiresAt } : {}),
           };
           const compressed = await compressBuffer(Buffer.from(JSON.stringify(obj)));
-          db.prepare('INSERT OR REPLACE INTO pastes (id, payload, expires_at) VALUES (?,?,?)').run(
+          db.prepare('INSERT OR REPLACE INTO pastes (id, payload, expires_at, owner, shared_with) VALUES (?,?,?,?,?)').run(
             id,
             compressed.toString('base64'),
-            expiresAt ? Date.parse(expiresAt) : null
+            expiresAt ? Date.parse(expiresAt) : null,
+            owner,
+            JSON.stringify([])
           );
           await cache.set(`paste_${id}`, obj);
           return id;
@@ -558,6 +666,31 @@ function createDatabase(): DatabaseBackend {
           db.prepare('UPDATE pastes SET payload = ? WHERE id = ?').run(compressed.toString('base64'), id);
           await cache.set(`paste_${id}`, parsed);
           return parsed;
+        },
+        updatePaste: async (id: string, patch: UpdatePastePatch): Promise<UpdatePasteResult> => {
+          // Version check + write inside one synchronous transaction so two
+          // concurrent PATCHes cannot both win the optimistic-concurrency race.
+          const apply = db.transaction((): UpdatePasteResult => {
+            const row = db.prepare('SELECT payload FROM pastes WHERE id = ?').get(id);
+            if (!row) return { status: 'not_found' };
+            const parsed = JSON.parse(decompressBufferSync(Buffer.from(row.payload, 'base64')).toString('utf-8')) as Paste;
+            const currentVersion = typeof parsed.version === 'number' ? parsed.version : 0;
+            if (patch.expectedVersion !== undefined && patch.expectedVersion !== currentVersion) {
+              return { status: 'conflict', paste: parsed };
+            }
+            const next = applyPastePatch(parsed, patch);
+            const compressed = compressBufferSync(Buffer.from(JSON.stringify(next)));
+            db.prepare('UPDATE pastes SET payload = ?, owner = ?, shared_with = ? WHERE id = ?').run(
+              compressed.toString('base64'),
+              typeof next.owner === 'string' ? next.owner : null,
+              JSON.stringify(next.sharedWith || []),
+              id
+            );
+            return { status: 'ok', paste: next };
+          });
+          const result = apply();
+          if (result.status !== 'not_found') await cache.set(`paste_${id}`, result.paste);
+          return result;
         },
         deleteExpiredPastes: async () => {
           const now = Date.now();
@@ -934,8 +1067,14 @@ function createDatabase(): DatabaseBackend {
 
 const db = createDatabase();
 
-export async function savePaste(id: string, content: string, name: string, permanent: boolean): Promise<string> {
-  return db.savePaste(id, content, name, permanent);
+export async function savePaste(
+  id: string,
+  content: string,
+  name: string,
+  permanent: boolean,
+  owner: string | null = null
+): Promise<string> {
+  return db.savePaste(id, content, name, permanent, owner);
 }
 
 export async function getPaste(id: string): Promise<Paste | null> {
@@ -948,6 +1087,15 @@ export async function deletePaste(id: string): Promise<void> {
 
 export async function updatePasteName(id: string, newName: string): Promise<Paste | null> {
   return db.updatePasteName(id, newName);
+}
+
+// Full ownership-aware update. The JSON and SQLite backends implement it; any
+// other backend fails closed with a clear error instead of losing the change.
+export async function updatePaste(id: string, patch: UpdatePastePatch): Promise<UpdatePasteResult> {
+  if (!db.updatePaste) {
+    throw new Error('This database backend does not support paste updates.');
+  }
+  return db.updatePaste(id, patch);
 }
 
 export async function deleteExpiredPastes(): Promise<void> {

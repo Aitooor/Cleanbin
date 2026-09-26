@@ -4,6 +4,14 @@ import { getPage, invalidateCache, removePasteFromCache } from '../../utils/past
 import { postMessage } from '../../utils/broadcast';
 import { getSessionFromRequest, requireSession } from '../../utils/auth';
 import { getPermanentDeleteLimit } from '../../utils/users';
+import {
+  canEdit,
+  normalizeEmail,
+  resolveScope,
+  selectVisible,
+  toAccessFields,
+  type PasteViewer,
+} from '../../utils/pasteAccess';
 import { isValidPasteId, MAX_PASTE_CONTENT_LENGTH } from '../../utils/validation';
 
 // Cap the request body size for this route (content is validated again per-request).
@@ -19,11 +27,22 @@ function isPermanentPaste(paste: any): boolean {
   return String(paste?.permanent) === 'true' || paste?.permanent === true;
 }
 
+function byCreatedAtDesc(a: any, b: any): number {
+  return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
+}
+
+// Adds the ownership fields the dashboard needs while keeping the raw paste
+// shape used by the editor/preview.
+function withAccess(item: any, viewer: PasteViewer) {
+  return { ...item, ...toAccessFields(item, viewer) };
+}
+
 function getFieldValue(item: any, field?: string): string {
   if (field === 'name') return item?.name || '';
   if (field === 'content') return item?.content || '';
   if (field === 'id') return item?.id || '';
-  return `${item?.name || ''} ${item?.content || ''} ${item?.id || ''}`;
+  if (field === 'owner') return item?.owner || '';
+  return `${item?.name || ''} ${item?.content || ''} ${item?.id || ''} ${item?.owner || ''}`;
 }
 
 function matchesRule(rule: any, item: any): boolean {
@@ -54,12 +73,15 @@ function matchesSimpleFilter(item: any, query: string, field?: string): boolean 
   if (field === 'name') return (item?.name || '').toLowerCase().includes(q);
   if (field === 'content') return (item?.content || '').toLowerCase().includes(q);
   if (field === 'id') return (item?.id || '').toLowerCase().includes(q);
-  return [item?.name, item?.content, item?.id].some((value) => String(value || '').toLowerCase().includes(q));
+  if (field === 'owner') return (item?.owner || '').toLowerCase().includes(q);
+  return [item?.name, item?.content, item?.id, item?.owner].some((value) => String(value || '').toLowerCase().includes(q));
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
+      const viewer = getSessionFromRequest(req);
+      const scope = resolveScope((req.query.scope as string) || undefined, viewer);
       const force = req.query.force === '1';
       const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
       const limit = Math.min(1000, Math.max(1, parseInt((req.query.limit as string) || '50', 10)));
@@ -70,8 +92,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const token = (req.query.token as string) || undefined;
       if (token) {
         const result = await getPastes(page, limit, token);
+        const visible = selectVisible(result.items, viewer, scope).map((item) => withAccess(item, viewer));
         res.setHeader('Cache-Control', `public, max-age=5`);
-        return res.status(200).json({ total: result.total, page, limit, items: result.items, nextPageToken: result.nextPageToken || null });
+        return res.status(200).json({ total: result.total, page, limit, items: visible, nextPageToken: result.nextPageToken || null });
       }
       // If preview/filtering requested, perform server-side filtering and pagination
       if (preview) {
@@ -90,7 +113,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Fetch all items (limited to MAX_SCAN to avoid huge memory usage)
         const MAX_SCAN = Number(process.env.PREVIEW_MAX_SCAN || 10000);
         const all = await getAllPastes();
-        const scanned = all.slice(0, MAX_SCAN);
+        // Permission filtering happens before the scan cap so a user can never
+        // page past somebody else's pastes.
+        const scoped = selectVisible(all, viewer, scope);
+        const scanned = scoped.slice(0, MAX_SCAN);
 
         let matchedItems = scanned;
         if (Array.isArray(filterRules) && filterRules.length > 0) {
@@ -102,16 +128,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const start = (page - 1) * limit;
         const pageItems = matchedItems.slice(start, start + limit);
         // if idsOnly requested, map to minimal representation
-        const items = idsOnly ? pageItems.map((p: any) => ({ id: p.id, name: p.name, permanent: p.permanent })) : pageItems;
+        const items = idsOnly
+          ? pageItems.map((p: any) => ({ id: p.id, name: p.name, permanent: p.permanent, owner: p.owner ?? null, mine: !!viewer && p.owner === normalizeEmail(viewer.email) }))
+          : pageItems.map((item: any) => withAccess(item, viewer));
         res.setHeader('Cache-Control', 'no-store');
-        return res.status(200).json({ total: totalMatched, page, limit, items, truncated: all.length > MAX_SCAN });
+        return res.status(200).json({ total: totalMatched, page, limit, items, truncated: scoped.length > MAX_SCAN });
       }
 
-      const result = await getPage(page, limit, force);
-      // Prevent client-side caching so dashboard always fetches fresh data immediately.
-      // Server still uses in-memory cache for efficiency, but clients should not reuse older responses.
+      // The fast in-memory page cache only covers the unfiltered "everything"
+      // listing an admin sees. Every other scope is permission-filtered, which
+      // requires reading the rows to decide what the viewer may see.
+      if (scope === 'all' && viewer?.role === 'admin') {
+        const result = await getPage(page, limit, force);
+        // Prevent client-side caching so dashboard always fetches fresh data immediately.
+        res.setHeader('Cache-Control', 'no-store');
+        return res
+          .status(200)
+          .json({ total: result.total, page, limit, items: result.items.map((item) => withAccess(item, viewer)) });
+      }
+
+      const all = await getAllPastes();
+      const visible = selectVisible(all, viewer, scope).sort(byCreatedAtDesc);
+      const total = visible.length;
+      const start = (page - 1) * limit;
+      const items = visible.slice(start, start + limit).map((item) => withAccess(item, viewer));
       res.setHeader('Cache-Control', 'no-store');
-      res.status(200).json({ total: result.total, page, limit, items: result.items });
+      res.status(200).json({ total, page, limit, items });
     } catch (error) {
       console.error('GET /api/pastes error:', error);
       res.status(500).json({ message: 'Failed to fetch pastes' });
@@ -126,12 +168,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(413).json({ message: 'Paste content is too large' });
       }
 
-      const isLoggedIn = !!getSessionFromRequest(req);
+      const session = getSessionFromRequest(req);
+      const isLoggedIn = !!session;
       if (isLoggedIn && !name) {
         return res.status(400).json({ message: 'Name is required for permanent pastes.' });
       }
 
-      await savePaste(id, content, name, isLoggedIn);
+      const owner = session ? normalizeEmail(session.email) : null;
+      await savePaste(id, content, name, isLoggedIn, owner);
       // Invalidate cache immediately so dashboard sees new paste
       invalidateCache();
       res.status(201).json({ message: 'Paste created' });
@@ -203,8 +247,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // Non-admins may only delete a bounded number of permanent pastes per
-      // operation. Temporary pastes do not count towards the limit.
+      // Non-admins may only delete pastes they can access (owned or shared) and
+      // may only remove a bounded number of permanent pastes per operation.
+      // Temporary pastes do not count towards the limit.
       if (session.role !== 'admin') {
         let all = loadedPastes;
         if (!all) {
@@ -213,6 +258,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!all) {
           return res.status(500).json({ message: 'Failed to load pastes for deletion' });
         }
+
+        const allowedIds = new Set(
+          all.filter((paste: any) => canEdit(paste, session)).map((paste: any) => paste.id)
+        );
+        toDeleteIds = toDeleteIds.filter((id) => allowedIds.has(id));
 
         const permanentIds = new Set(
           all.filter(isPermanentPaste).map((paste: any) => paste.id)

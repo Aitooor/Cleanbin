@@ -11,12 +11,19 @@ export type DashboardSession = {
     permanentDeleteLimit: number | null;
 };
 
+export type PasteScope = 'all' | 'mine' | 'shared' | 'anonymous' | 'default';
+
 export type Paste = {
     id: string;
     name: string;
     content?: string;
     createdAt: string;
     permanent: boolean;
+    owner?: string | null;
+    sharedWith?: string[];
+    mine?: boolean;
+    version?: number;
+    updatedAt?: string;
 };
 
 export type UserStatus = 'invited' | 'active';

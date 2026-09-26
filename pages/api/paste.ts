@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { savePaste, getPaste } from '../../utils/db';
 import { invalidateCache, addPasteToCache } from '../../utils/pastesCache';
 import { getSessionFromRequest } from '../../utils/auth';
+import { normalizeEmail } from '../../utils/pasteAccess';
 import { isValidPasteId, MAX_PASTE_CONTENT_LENGTH } from '../../utils/validation';
 
 // Cap the request body size for this route (content is validated again per-request).
@@ -25,8 +26,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 return res.status(413).json({ message: 'Paste content is too large' });
             }
 
-            const isLoggedIn = !!getSessionFromRequest(req);
+            const session = getSessionFromRequest(req);
+            const isLoggedIn = !!session;
             const permanent = isLoggedIn && bodyPermanent !== false && bodyPermanent !== 'false';
+            const owner = session ? normalizeEmail(session.email) : null;
 
             if (permanent && (typeof name !== 'string' || !name.trim())) {
                 return res.status(400).json({ message: 'Name is required for permanent pastes.' });
@@ -34,15 +37,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const id = uuidv4();
             const pasteName = name && typeof name === 'string' ? name : '';
-            await savePaste(id, content, pasteName, permanent);
+            await savePaste(id, content, pasteName, permanent, owner);
             // Try to update in-memory cache quickly to reflect the new paste instantly.
             try {
+                const createdAt = new Date().toISOString();
                 addPasteToCache({
                     id,
                     content,
                     name: pasteName || '',
                     permanent: permanent ? true : false,
-                    createdAt: new Date().toISOString(),
+                    createdAt,
+                    owner,
+                    sharedWith: [],
+                    version: 1,
+                    updatedAt: createdAt,
                 });
             } catch (err) {
                 // fallback to full invalidation if update fails
