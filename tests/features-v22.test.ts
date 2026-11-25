@@ -120,6 +120,24 @@ describe('Cleanbin v2.2 — Ultra-Compact Storage, CLI /raw + API Tokens, Quotas
     const readAfter = await getPaste('legacy-row-1');
     expect(readAfter?.content).toBe(sampleCode);
     expect(readAfter?.name).toBe('Legacy Code');
+
+    // 4. Verify deleting/burning a large paste immediately shrinks SQLite + WAL on disk via reclaimPages()
+    const bigPayload = crypto.randomBytes(120_000).toString('base64');
+    const bigRes = await app.request('/api/paste', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: bigPayload, ttl: 'burn' }),
+    });
+    expect(bigRes.status).toBe(201);
+    const { id: bigId } = (await bigRes.json()) as { id: string };
+    const sizeWithBig = await db.fileSizeBytes!();
+    expect(sizeWithBig).toBeGreaterThan(150_000);
+
+    // Opening the burn-after-read paste deletes it and immediately reclaims disk pages + truncates WAL
+    const burnRead = await app.request(`/raw/${bigId}`);
+    expect(burnRead.status).toBe(200);
+    const sizeAfterBurn = await db.fileSizeBytes!();
+    expect(sizeAfterBurn).toBeLessThan(sizeWithBig - 100_000);
   });
 
   it('supports CLI terminal uploads (POST /raw, PUT /raw/:filename) and SHA-256 personal API tokens', async () => {

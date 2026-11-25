@@ -4,7 +4,7 @@ import { FiExternalLink } from 'react-icons/fi';
 import { Button, IconButton } from '../../components/CleanUi';
 import { useNotification } from '../../components/NotificationProvider';
 import { useSession } from '../../hooks/useSession';
-import { formatDateTime } from '../../utils/format';
+import { formatBytes, formatDateTime } from '../../utils/format';
 import type { ListedPaste } from '../../../shared/types';
 
 const SAMPLE_SIZE = 1000;
@@ -19,6 +19,7 @@ export default function OverviewPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [usersCount, setUsersCount] = useState<number | null>(null);
+  const [storedBytes, setStoredBytes] = useState<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -45,6 +46,14 @@ export default function OverviewPage() {
       .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((list) => {
         if (active) setUsersCount(Array.isArray(list) ? list.length : 0);
+      })
+      .catch(() => {});
+    fetch('/api/settings')
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((data) => {
+        if (active && typeof data?.storage?.storedBytes === 'number') {
+          setStoredBytes(data.storage.storedBytes);
+        }
       })
       .catch(() => {});
     return () => {
@@ -78,6 +87,14 @@ export default function OverviewPage() {
           <span className="cb-stat-label">temporary</span>
           <span className="cb-stat-val cb-stat-val--warn">{loading ? '—' : temporaryCount}</span>
         </div>
+        {isAdmin && (
+          <div className="cb-stat">
+            <span className="cb-stat-label">on disk</span>
+            <span className="cb-stat-val cb-stat-val--perm">
+              {storedBytes !== null ? formatBytes(storedBytes) : '—'}
+            </span>
+          </div>
+        )}
         {isAdmin && (
           <div className="cb-stat">
             <span className="cb-stat-label">accounts</span>
