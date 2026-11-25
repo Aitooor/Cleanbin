@@ -1,6 +1,9 @@
 export type SessionRole = 'admin' | 'user';
 export type UserRole = SessionRole;
 export type UserStatus = 'invited' | 'active';
+export type RegistrationMode = 'invite' | 'open';
+
+export type PasteTtlOption = '1h' | '24h' | '7d' | '30d' | 'burn' | 'permanent';
 
 export type PasteScope = 'all' | 'mine' | 'shared' | 'anonymous' | 'default';
 export type PasteFilterField = 'any' | 'name' | 'content' | 'id' | 'owner';
@@ -30,6 +33,9 @@ export interface PasteRecord {
   content: string;
   name: string;
   permanent: boolean;
+  burnAfterRead?: boolean;
+  burned?: boolean;
+  slidingTtl?: boolean;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string | null;
@@ -43,6 +49,7 @@ export interface ListedPaste {
   name: string;
   content?: string;
   permanent: boolean;
+  burnAfterRead?: boolean;
   createdAt: string;
   updatedAt?: string;
   expiresAt?: string | null;
@@ -87,4 +94,9 @@ export interface DashboardSessionInfo {
   createdAt: string;
   lastSeenAt: string;
   current: boolean;
+}
+
+export interface AppSettings {
+  registrationMode: RegistrationMode;
+  defaultUserDeleteLimit?: number;
 }

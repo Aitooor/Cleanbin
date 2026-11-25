@@ -1,6 +1,6 @@
 {
   "name": "cleanbin",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "Minimalist pastebin built with Hono, Vite, React, and SQL.",
   "type": "module",

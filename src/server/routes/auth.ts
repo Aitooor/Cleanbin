@@ -13,11 +13,17 @@ import {
 import { hasPasskey } from '../services/passkeys.js';
 import { createUserSession } from '../services/sessions.js';
 import {
+  createUser,
   getAccountState,
   getPermanentDeleteLimit,
+  SETUP_PASSWORD_MIN_LENGTH,
+  UserExistsError,
+  UserValidationError,
   verifyAndConsumeTotp,
   verifyUserCredentials,
 } from '../services/users.js';
+import { getServerSettings } from '../services/settings.js';
+import { isValidEmail } from '../../shared/validation.js';
 
 export const authRoutes = new Hono();
 
@@ -99,6 +105,54 @@ authRoutes.post('/api/auth', loginLimiter, async (c) => {
     setupRequired: true,
     challenge: createAuthChallenge(auth.email, 'setup'),
   });
+});
+
+authRoutes.post('/api/auth/register', loginLimiter, async (c) => {
+  const settings = await getServerSettings();
+  if (settings.registrationMode !== 'open') {
+    return c.json(
+      { message: 'Public registration is disabled. Ask an administrator for an invitation.' },
+      403
+    );
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const { email, password } = (body ?? {}) as Record<string, unknown>;
+
+  if (!isValidEmail(email)) {
+    return c.json({ message: 'A valid email is required' }, 400);
+  }
+  if (typeof password !== 'string' || password.length < SETUP_PASSWORD_MIN_LENGTH) {
+    return c.json(
+      { message: `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters.` },
+      400
+    );
+  }
+
+  try {
+    const { user } = await createUser({
+      email,
+      password,
+      role: 'user',
+      permanentDeleteLimit: settings.defaultUserDeleteLimit,
+    });
+    return c.json(
+      {
+        setupRequired: true,
+        email: user.email,
+        challenge: createAuthChallenge(user.email, 'setup'),
+      },
+      201
+    );
+  } catch (error) {
+    if (error instanceof UserExistsError) {
+      return c.json({ message: 'An account with this email already exists.' }, 409);
+    }
+    if (error instanceof UserValidationError) {
+      return c.json({ message: error.message }, 400);
+    }
+    return c.json({ message: 'Registration failed.' }, 500);
+  }
 });
 
 authRoutes.post('/api/auth/2fa', totpLimiter, async (c) => {

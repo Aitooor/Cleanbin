@@ -28,7 +28,11 @@ import {
   normalizeEmail,
 } from '../../shared/validation.js';
 
+import type { PasteTtlOption } from '../../shared/types.js';
+
 export const pasteRoutes = new Hono();
+
+const VALID_TTL_OPTIONS = new Set<PasteTtlOption>(['1h', '24h', '7d', '30d', 'burn', 'permanent']);
 
 const createLimiter = rateLimit({
   name: 'create-paste',
@@ -43,7 +47,13 @@ const jsonBody1Mb = bodyLimit({
 
 pasteRoutes.post('/api/paste', createLimiter, jsonBody1Mb, async (c) => {
   const body = await c.req.json().catch(() => null);
-  const { content, name, permanent: bodyPermanent } = (body ?? {}) as Record<string, unknown>;
+  const {
+    content,
+    name,
+    permanent: bodyPermanent,
+    ttl: bodyTtl,
+    burnAfterRead: bodyBurn,
+  } = (body ?? {}) as Record<string, unknown>;
 
   if (typeof content !== 'string' || !content) {
     return c.json({ message: 'Content is required' }, 400);
@@ -52,9 +62,18 @@ pasteRoutes.post('/api/paste', createLimiter, jsonBody1Mb, async (c) => {
     return c.json({ message: 'Paste content is too large' }, 413);
   }
 
+  const ttlOption: PasteTtlOption | undefined =
+    typeof bodyTtl === 'string' && VALID_TTL_OPTIONS.has(bodyTtl as PasteTtlOption)
+      ? (bodyTtl as PasteTtlOption)
+      : undefined;
+
   const session = await getOptionalActiveSession(c);
   const isLoggedIn = !!session;
-  const permanent = isLoggedIn && bodyPermanent !== false && bodyPermanent !== 'false';
+  const wantsPermanent =
+    ttlOption === 'permanent' ||
+    (ttlOption === undefined && bodyPermanent !== false && bodyPermanent !== 'false' && bodyBurn !== true);
+  const permanent = isLoggedIn && wantsPermanent;
+  const burnAfterRead = !permanent && (bodyBurn === true || ttlOption === 'burn');
   const owner = session ? normalizeEmail(session.email) : null;
 
   const trimmedName = typeof name === 'string' ? name.trim() : '';
@@ -66,20 +85,30 @@ pasteRoutes.post('/api/paste', createLimiter, jsonBody1Mb, async (c) => {
   }
 
   const id = crypto.randomUUID();
-  const created = await createPaste(id, content, trimmedName, permanent, owner);
+  const created = await createPaste(id, content, trimmedName, permanent, owner, {
+    ttl: ttlOption,
+    burnAfterRead,
+  });
   try {
     addPasteToCache(created);
   } catch {
     invalidateCache();
   }
 
-  return c.json({ id }, 201);
+  return c.json({ id, burnAfterRead }, 201);
 });
 
 pasteRoutes.get('/api/paste', async (c) => {
   const id = c.req.query('id');
   if (!isValidPasteId(id)) {
     return c.json({ message: 'Invalid ID' }, 400);
+  }
+  const meta = await getPasteMetadata(id);
+  if (!meta) {
+    return c.json({ message: 'Paste not found' }, 404);
+  }
+  if (meta.burnAfterRead) {
+    return c.json({ message: 'One-time pastes cannot be preloaded without opening them' }, 403);
   }
   const paste = await getPaste(id, { touch: false });
   if (!paste) {
@@ -93,6 +122,30 @@ pasteRoutes.get('/api/paste', async (c) => {
   });
 });
 
+pasteRoutes.get('/raw/:id', async (c) => {
+  const id = c.req.param('id');
+  if (!isValidPasteId(id)) {
+    return c.text('Invalid paste ID\n', 400);
+  }
+  const paste = await getPaste(id, { touch: true });
+  if (!paste) {
+    return c.text('Paste not found\n', 404);
+  }
+  if (paste.burned) {
+    removePasteFromCache(id);
+  }
+  if (paste.content.startsWith('cb-e2ee:v1:')) {
+    return c.text(
+      'This paste is end-to-end encrypted in the browser (#k=...) and cannot be decrypted by the server.\n',
+      400
+    );
+  }
+  c.header('Content-Type', 'text/plain; charset=utf-8');
+  c.header('Cache-Control', 'no-store');
+  c.header('X-Content-Type-Options', 'nosniff');
+  return c.body(paste.content);
+});
+
 pasteRoutes.get('/api/paste/:id', async (c) => {
   const id = c.req.param('id');
   if (!isValidPasteId(id)) {
@@ -104,9 +157,12 @@ pasteRoutes.get('/api/paste/:id', async (c) => {
   if (!paste) {
     return c.json({ error: 'Paste not found', message: 'Paste not found' }, 404);
   }
+  if (paste.burned) {
+    removePasteFromCache(id);
+  }
 
   const session = await getOptionalActiveSession(c);
-  const editable = canEdit(paste, session);
+  const editable = !paste.burned && canEdit(paste, session);
 
   // Never leak private account emails (`owner` / `sharedWith`) to anonymous or
   // unprivileged viewers opening a public paste URL.
@@ -114,7 +170,9 @@ pasteRoutes.get('/api/paste/:id', async (c) => {
     content: paste.content,
     name: paste.name ?? '',
     permanent: paste.permanent,
-    expiresAt: paste.permanent ? null : paste.expiresAt ?? null,
+    burnAfterRead: Boolean(paste.burnAfterRead),
+    burned: Boolean(paste.burned),
+    expiresAt: paste.permanent || paste.burned ? null : paste.expiresAt ?? null,
     owner: editable ? getOwner(paste) : null,
     sharedWith: editable ? getSharedWith(paste) : [],
     canEdit: editable,
