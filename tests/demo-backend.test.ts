@@ -72,6 +72,48 @@ describe('In-memory Live Demo API shim (zero persistence)', () => {
     });
     expect(reset2faRes.status).toBe(200);
 
+    // Settings, compaction & personal API tokens in demo mode
+    const patchSettings = await fetch('https://aitooor.github.io/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxPastesPerUser: 2, maxStorageMbPerUser: 5 }),
+    });
+    expect(patchSettings.status).toBe(200);
+    const settingsJson = await patchSettings.json();
+    expect(settingsJson.maxPastesPerUser).toBe(2);
+    expect(settingsJson.storage.pasteCount).toBeGreaterThan(0);
+
+    const compactRes = await fetch('https://aitooor.github.io/api/settings/compact', { method: 'POST' });
+    expect(compactRes.status).toBe(200);
+
+    const tokCreate = await fetch('https://aitooor.github.io/api/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'demo-cli' }),
+    });
+    expect(tokCreate.status).toBe(201);
+    const tokJson = await tokCreate.json();
+    expect(tokJson.token.startsWith('cb_')).toBe(true);
+
+    // Switch to standard user alex@example.com (already owns 1 seed paste) -> 1 more succeeds, next hits cap (2)
+    await fetch('https://aitooor.github.io/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'alex@example.com', password: 'demo' }),
+    });
+    const alexOk = await fetch('https://aitooor.github.io/api/paste', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Alex 2', content: 'ok' }),
+    });
+    expect(alexOk.status).toBe(201);
+    const alexCapped = await fetch('https://aitooor.github.io/api/paste', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Alex 3', content: 'blocked' }),
+    });
+    expect(alexCapped.status).toBe(403);
+
     resetDemoState();
     const afterReset = await fetch(`https://aitooor.github.io/api/paste/${id}`);
     expect(afterReset.status).toBe(404);

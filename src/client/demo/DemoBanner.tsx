@@ -79,10 +79,24 @@ export default function DemoBanner() {
       </button>
       <button
         type="button"
-        style={location.pathname.startsWith('/dashboard') ? activeBtn : pillBtn}
+        style={location.pathname === '/release-notes-md' ? activeBtn : pillBtn}
+        onClick={() => navigate('/release-notes-md')}
+      >
+        Markdown
+      </button>
+      <button
+        type="button"
+        style={location.pathname === '/dashboard' ? activeBtn : pillBtn}
         onClick={() => navigate('/dashboard')}
       >
         Dashboard
+      </button>
+      <button
+        type="button"
+        style={location.pathname === '/dashboard/settings' ? activeBtn : pillBtn}
+        onClick={() => navigate('/dashboard/settings')}
+      >
+        Settings
       </button>
       <button type="button" style={pillBtn} onClick={() => void handleReset()}>
         Reset

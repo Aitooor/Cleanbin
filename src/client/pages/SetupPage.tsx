@@ -56,11 +56,13 @@ export default function SetupPage() {
   const qrSvg = useMemo(() => {
     if (!secret?.otpauthUrl) return '';
     try {
+      // Standard dark-on-light polarity with a 2-module quiet zone guarantees instant
+      // recognition across iOS Camera, Google Authenticator, Aegis, Ente, and ZXing.
       return renderSVG(secret.otpauthUrl, {
-        whiteColor: '#181818',
-        blackColor: '#e0e0e0',
-        border: 1,
-      });
+        whiteColor: '#e8e8e8',
+        blackColor: '#141414',
+        border: 2,
+      }).replace('<svg ', '<svg width="168" height="168" style="display:block;border-radius:3px;" ');
     } catch {
       return '';
     }
@@ -241,7 +243,7 @@ export default function SetupPage() {
               >
                 <div
                   aria-label="Authenticator QR code"
-                  style={{ width: 164, height: 164, lineHeight: 0 }}
+                  style={{ width: 168, height: 168, lineHeight: 0 }}
                   dangerouslySetInnerHTML={{ __html: qrSvg }}
                 />
               </div>
