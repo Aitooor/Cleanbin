@@ -11,6 +11,7 @@ import { createUserSession } from '../services/sessions.js';
 import { buildOtpAuthUrl, groupSecret } from '../services/totp.js';
 import {
   enableTotp,
+  hasStoredPassword,
   resolveInviteEmail,
   SETUP_PASSWORD_MIN_LENGTH,
   setUserPassword,
@@ -38,13 +39,21 @@ setupRoutes.post('/api/setup/start', setupLimiter, async (c) => {
       if (!email) {
         return c.json({ message: 'This invitation is invalid or has expired' }, 410);
       }
-      if (typeof password !== 'string' || password.length < SETUP_PASSWORD_MIN_LENGTH) {
+      const alreadyHasPassword = await hasStoredPassword(email);
+      if (typeof password === 'string' && password.length > 0) {
+        if (password.length < SETUP_PASSWORD_MIN_LENGTH) {
+          return c.json(
+            { message: `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters` },
+            400
+          );
+        }
+        await setUserPassword(email, password);
+      } else if (!alreadyHasPassword) {
         return c.json(
-          { message: `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters` },
+          { needsPassword: true, message: `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters` },
           400
         );
       }
-      await setUserPassword(email, password);
     } else if (typeof challenge === 'string' && challenge) {
       const payload = verifyAuthChallenge(challenge, 'setup');
       if (!payload) {

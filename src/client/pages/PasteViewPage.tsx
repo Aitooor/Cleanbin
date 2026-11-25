@@ -1,6 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { FiClipboard, FiCopy, FiFilePlus, FiFileText, FiLock } from 'react-icons/fi';
+import {
+  FiClipboard,
+  FiCode,
+  FiCopy,
+  FiDownload,
+  FiEye,
+  FiFilePlus,
+  FiFileText,
+  FiLock,
+} from 'react-icons/fi';
 import hljs from 'highlight.js/lib/core';
 import 'highlight.js/styles/github-dark.css';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -21,10 +30,12 @@ import cLang from 'highlight.js/lib/languages/c';
 import cpp from 'highlight.js/lib/languages/cpp';
 import csharp from 'highlight.js/lib/languages/csharp';
 import markdown from 'highlight.js/lib/languages/markdown';
+import diff from 'highlight.js/lib/languages/diff';
 import ini from 'highlight.js/lib/languages/ini';
 import { useNotification } from '../components/NotificationProvider';
 import { listenBroadcast, postBroadcast } from '../utils/broadcast';
 import { decryptPastePayload, isEncryptedPasteContent } from '../utils/e2ee';
+import { renderSafeMarkdown } from '../utils/markdown';
 import { buildPasteTarget, parsePasteFragment, type LineRange } from '../utils/urlHash';
 
 const LANGUAGES: Array<[string, Parameters<typeof hljs.registerLanguage>[1]]> = [
@@ -46,6 +57,7 @@ const LANGUAGES: Array<[string, Parameters<typeof hljs.registerLanguage>[1]]> = 
   ['cpp', cpp],
   ['csharp', csharp],
   ['markdown', markdown],
+  ['diff', diff],
   ['ini', ini],
 ];
 
@@ -54,6 +66,49 @@ for (const [langName, def] of LANGUAGES) {
 }
 
 const LANGUAGE_NAMES = LANGUAGES.map(([n]) => n);
+
+const EXT_BY_LANGUAGE: Record<string, string> = {
+  javascript: 'js',
+  typescript: 'ts',
+  python: 'py',
+  bash: 'sh',
+  json: 'json',
+  java: 'java',
+  kotlin: 'kt',
+  sql: 'sql',
+  yaml: 'yaml',
+  dockerfile: 'Dockerfile',
+  rust: 'rs',
+  go: 'go',
+  xml: 'html',
+  css: 'css',
+  c: 'c',
+  cpp: 'cpp',
+  csharp: 'cs',
+  markdown: 'md',
+  diff: 'diff',
+  ini: 'ini',
+  plaintext: 'txt',
+};
+
+function buildDownloadFilename(rawName: string, fallbackId: string, lang: string): string {
+  const baseRaw = (rawName || fallbackId || 'paste').split('\n')[0].trim();
+  const safeBase = baseRaw
+    // eslint-disable-next-line no-control-regex
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'paste';
+
+  if (/\.[a-z0-9]{1,10}$/i.test(safeBase)) {
+    return safeBase;
+  }
+  const ext = EXT_BY_LANGUAGE[lang] || 'txt';
+  if (ext === 'Dockerfile') {
+    return safeBase === 'paste' ? 'Dockerfile' : `${safeBase}.dockerfile`;
+  }
+  return `${safeBase}.${ext}`;
+}
 
 // Splits highlight.js HTML output by newline while balancing open `<span>` tags
 // so multi-line strings/comments keep their syntax color across numbered rows.
@@ -121,6 +176,7 @@ export default function PasteViewPage() {
   const [timeLeftLabel, setTimeLeftLabel] = useState<string | null>(null);
   const [showImports, setShowImports] = useState(false);
   const [langOverride, setLangOverride] = useState<string>('auto');
+  const [markdownPreview, setMarkdownPreview] = useState(false);
 
   const [isEncrypted, setIsEncrypted] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
@@ -146,6 +202,7 @@ export default function PasteViewPage() {
   useEffect(() => {
     if (!id) return;
     scrolledOnceRef.current = false;
+    setMarkdownPreview(false);
 
     const routerState = (location.state ?? null) as UnburnedRouterState | null;
     if (routerState?.unburnedPreview) {
@@ -255,12 +312,12 @@ export default function PasteViewPage() {
         setTimeLeftLabel(null);
         return;
       }
-      const diff = target - Date.now();
-      if (diff <= 0) {
+      const diffMs = target - Date.now();
+      if (diffMs <= 0) {
         setTimeLeftLabel('Deleting soon');
         return;
       }
-      const totalSeconds = Math.floor(diff / 1000);
+      const totalSeconds = Math.floor(diffMs / 1000);
       const days = Math.floor(totalSeconds / 86400);
       const hours = Math.floor((totalSeconds % 86400) / 3600);
       const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -352,9 +409,21 @@ export default function PasteViewPage() {
     };
   }, [content, langOverride]);
 
+  const isMarkdownCapable = useMemo(() => {
+    if (!content) return false;
+    if (langOverride === 'markdown') return true;
+    if (langOverride === 'auto' && parsedHighlight.detectedLang === 'markdown') return true;
+    return /\.(md|markdown)$/i.test(name.trim());
+  }, [content, langOverride, parsedHighlight.detectedLang, name]);
+
+  const renderedMarkdownHtml = useMemo(() => {
+    if (!markdownPreview || !content) return '';
+    return renderSafeMarkdown(content);
+  }, [markdownPreview, content]);
+
   // If URL specifies a line inside collapsed imports, auto-expand imports and scroll into view
   useEffect(() => {
-    if (!selectedLines || parsedHighlight.linesHtml.length === 0) return;
+    if (markdownPreview || !selectedLines || parsedHighlight.linesHtml.length === 0) return;
     if (
       !showImports &&
       parsedHighlight.importStart >= 0 &&
@@ -371,7 +440,7 @@ export default function PasteViewPage() {
         rowEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
       }
     }
-  }, [selectedLines, parsedHighlight, showImports]);
+  }, [selectedLines, parsedHighlight, showImports, markdownPreview]);
 
   const nameHtml = useMemo(() => {
     if (!name) return '';
@@ -426,6 +495,20 @@ export default function PasteViewPage() {
       return;
     }
     window.open(`/raw/${encodeURIComponent(id)}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleDownload = () => {
+    if (!content) return;
+    const filename = buildDownloadFilename(name, id || 'paste', parsedHighlight.detectedLang);
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const blobUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = blobUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
   };
 
   const handleClone = () => {
@@ -562,7 +645,7 @@ export default function PasteViewPage() {
         style={{
           alignSelf: 'flex-end',
           margin: '12px 12px 0 12px',
-          maxWidth: 320,
+          maxWidth: 420,
           padding: 8,
           background: 'rgba(34, 34, 34, 0.94)',
           border: '1px solid #333',
@@ -611,7 +694,7 @@ export default function PasteViewPage() {
           <div
             title={name || 'Untitled'}
             style={{
-              maxWidth: 290,
+              maxWidth: 380,
               fontSize: 13,
               color: '#b0b0b0',
               fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
@@ -624,13 +707,18 @@ export default function PasteViewPage() {
           />
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {!needsKey && content && (
             <select
               aria-label="Syntax highlight language"
               title="Syntax language"
               value={langOverride}
-              onChange={(e) => setLangOverride(e.target.value)}
+              onChange={(e) => {
+                setLangOverride(e.target.value);
+                if (e.target.value !== 'markdown' && e.target.value !== 'auto') {
+                  setMarkdownPreview(false);
+                }
+              }}
               style={{
                 width: 'auto',
                 height: 34,
@@ -655,6 +743,29 @@ export default function PasteViewPage() {
             </select>
           )}
 
+          {!needsKey && isMarkdownCapable && (
+            <button
+              type="button"
+              onClick={() => setMarkdownPreview((v) => !v)}
+              title={markdownPreview ? 'View source code' : 'Preview Markdown'}
+              aria-label={markdownPreview ? 'View source code' : 'Preview Markdown'}
+              style={{
+                ...actionBtnStyle,
+                height: 34,
+                padding: '0 9px',
+                gap: 5,
+                fontSize: 11,
+                fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
+                color: markdownPreview ? '#e0e0e0' : '#b0b0b0',
+                borderColor: markdownPreview ? '#4f4f4f' : '#333',
+                backgroundColor: markdownPreview ? '#282828' : '#1e1e1e',
+              }}
+            >
+              {markdownPreview ? <FiCode size={14} /> : <FiEye size={14} />}
+              <span>{markdownPreview ? 'Code' : 'Preview'}</span>
+            </button>
+          )}
+
           {!needsKey && content && (
             <>
               <button
@@ -674,6 +785,15 @@ export default function PasteViewPage() {
                 style={actionBtnStyle}
               >
                 <FiFileText size={17} />
+              </button>
+              <button
+                type="button"
+                onClick={handleDownload}
+                title="Download file"
+                aria-label="Download file"
+                style={actionBtnStyle}
+              >
+                <FiDownload size={17} />
               </button>
               <button
                 type="button"
@@ -759,6 +879,22 @@ export default function PasteViewPage() {
               decrypt in browser
             </button>
           </div>
+        </div>
+      ) : markdownPreview ? (
+        <div
+          style={{
+            width: '100vw',
+            flex: 1,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'stretch',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            className="cb-md"
+            dangerouslySetInnerHTML={{ __html: renderedMarkdownHtml }}
+          />
         </div>
       ) : (
         <div

@@ -29,10 +29,28 @@ Minimalist, self-hosted pastebin built with **Hono + Vite + React 19 + SQL** (`S
 
 ## Features
 
-- **Minimalist Dark UI (`#1e1e1e`)**: Full-screen distraction-free editor (`/` with `Ctrl+S` save & 2-space `Tab`/`Shift+Tab` indentation), syntax-highlighted viewer across 19 languages with collapsible `import` blocks, clickable line-range links (`#L12` / `#L10-L25`), and Copy / Raw (`/raw/:id`) / Clone actions (`/:id`), plus a flat 4-section dashboard (`/dashboard`).
+- **Minimalist Dark UI (`#1e1e1e`)**: Full-screen distraction-free editor (`/` with `Ctrl+S` save & 2-space `Tab`/`Shift+Tab` indentation), syntax-highlighted viewer across 20 languages (including `diff` and safe GFM **Markdown Preview** toggle), collapsible `import` blocks, clickable line-range links (`#L12` / `#L10-L25`), Copy / Raw (`/raw/:id`) / Smart Download / Clone actions, and a flat 5-section dashboard (`/dashboard`, `/dashboard/pastes`, `/dashboard/users`, `/dashboard/settings`, `/dashboard/account`).
+- **Terminal Upload (`POST /raw`) & Personal API Tokens**: Pipe files or logs straight from any shell (`cat build.log | curl -fsS --data-binary @- https://your-host/raw` or `curl -fsS -T script.py https://your-host/raw/script.py`) and mint revocable SHA-256-hashed `cb_...` personal API tokens in `/dashboard/account` for authenticated permanent CLI uploads.
 - **Privacy, Selectable TTL & Burn-After-Read**: Choose per-paste expiration (`1h`, `24h`, `7d`, `30d`, `1 read` burn-after-read with atomic self-destruction on first open, or `Permanent` for signed-in users) and optional **zero-knowledge client-side E2EE (`AES-256-GCM`)** where the decryption key stays strictly in the URL `#k=...` fragment and never reaches the server.
-- **Zero-Trust Account Security & Flexible Registration**: Administrators can switch account creation between **Invite-only** and **Open registration** directly from `/dashboard/users`. Every account enforces mandatory RFC 6238 **TOTP 2FA** (with anti-replay protection) or **WebAuthn Passkeys**, signed `HttpOnly` session cookies backed by revocable SQL sessions, and sliding-window rate limiting.
-- **Unified SQL Storage + Automatic v1 Migration**: Stores pastes (Brotli-compressed), users, sessions, passkeys, and settings in `SQLite` (default), `MariaDB/MySQL`, or `PostgreSQL`. Automatically upgrades existing Cleanbin v1 `data/pastes.db` and imports legacy `users.json` / `sessions.json` / `passkeys.json` on first boot without deleting the original files.
+- **Zero-Trust Auth, Quotas & Flexible Registration**: Switch between **Invite-only** and **Open registration** (with optional Resend email verification and per-user paste count & compressed MB quotas) from `/dashboard/settings`. Every account enforces mandatory RFC 6238 **TOTP 2FA** (with native monochrome SVG QR onboarding & anti-replay protection) or **WebAuthn Passkeys**.
+- **Ultra-Compact SQL Storage**: Compresses pure paste text with **Brotli quality 11 (`BROTLI_MODE_TEXT`)** stored as raw binary `BLOB`s on `SQLite` (zero JSON wrapper or Base64 inflation, incremental auto-vacuum, and one-click `VACUUM` compaction in `/dashboard/settings`), while supporting `MariaDB/MySQL` and `PostgreSQL` out of the box.
+
+## CLI Usage
+
+```bash
+# Anonymous paste (returns https://your-host/<id>)
+cat app.log | curl -fsS --data-binary @- https://your-host/raw
+
+# Upload file preserving filename + 24h TTL
+curl -fsS -H "X-TTL: 24h" -T deploy.sh https://your-host/raw/deploy.sh
+
+# Permanent owned paste using a personal API token from /dashboard/account
+cat notes.md | curl -fsS \
+  -H "Authorization: Bearer cb_your_token" \
+  -H "X-TTL: permanent" \
+  -H "X-Name: Architecture Notes.md" \
+  --data-binary @- https://your-host/raw
+```
 
 ## Quick Start
 
@@ -69,7 +87,7 @@ When running behind a reverse proxy (such as Nginx, Caddy, or Cloudflare), set `
 
 ## Development Workflow
 
- Feature and documentation changes land on the `dev` branch first (verified by CI across `npm audit`, strict TypeScript checks, Vitest suite, production build, and static demo build) before merging into `main`.
+Feature and documentation changes land on the `dev` branch first (verified by CI across `npm audit`, strict TypeScript checks, Vitest suite, production build, and static demo build) before merging into `main`.
 
 ## License
 

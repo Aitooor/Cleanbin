@@ -16,6 +16,9 @@ export interface SqlAdapter {
   execute(sql: string, params?: unknown[]): Promise<SqlRunResult>;
   transaction<T>(fn: (tx: SqlAdapter) => Promise<T>): Promise<T>;
   backup?(destinationPath: string): Promise<void>;
+  vacuum?(): Promise<void>;
+  reclaimPages?(): Promise<void>;
+  fileSizeBytes?(): Promise<number>;
   close(): Promise<void>;
 }
 
@@ -92,6 +95,7 @@ function openSqliteDriver(sqlitePath: string): SyncSqliteDriver {
 
 export function createSqliteAdapter(sqlitePath: string): SqlAdapter {
   const driver = openSqliteDriver(sqlitePath);
+  driver.exec('PRAGMA auto_vacuum = INCREMENTAL;');
   driver.exec('PRAGMA journal_mode = WAL;');
   driver.exec('PRAGMA synchronous = NORMAL;');
   driver.exec('PRAGMA foreign_keys = ON;');
@@ -151,6 +155,41 @@ export function createSqliteAdapter(sqlitePath: string): SqlAdapter {
       }
       const escaped = destinationPath.replace(/'/g, "''");
       driver.exec(`VACUUM INTO '${escaped}'`);
+    },
+    async vacuum(): Promise<void> {
+      let release!: () => void;
+      const previous = txLock;
+      txLock = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        driver.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+        driver.exec('PRAGMA auto_vacuum = INCREMENTAL;');
+        driver.exec('VACUUM;');
+        driver.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      } finally {
+        release();
+      }
+    },
+    async reclaimPages(): Promise<void> {
+      try {
+        driver.exec('PRAGMA incremental_vacuum(64);');
+      } catch {
+        // Best-effort incremental page reclamation
+      }
+    },
+    async fileSizeBytes(): Promise<number> {
+      let total = 0;
+      for (const candidate of [sqlitePath, `${sqlitePath}-wal`]) {
+        try {
+          const st = fs.statSync(candidate);
+          if (st.isFile()) total += st.size;
+        } catch {
+          // Ignore missing -wal file
+        }
+      }
+      return total;
     },
     async close(): Promise<void> {
       await txLock;

@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import type { SqlAdapter } from './adapter.js';
-import { compressPayload, decompressBufferAuto, decompressPayload } from './compression.js';
+import { compressContentCompact, decompressBufferAuto, decompressPayload } from './compression.js';
+import { compactAllPastes } from '../services/pastes.js';
 import { isValidPasteId, normalizeEmail } from '../../shared/validation.js';
 
 const BCRYPT_ROUNDS = 10;
@@ -266,25 +267,28 @@ async function migrateJsonPasteFiles(adapter: SqlAdapter, dataDir: string): Prom
         : [];
       const version = typeof parsed.version === 'number' && parsed.version > 0 ? parsed.version : 1;
 
-      const payload = await compressPayload(
-        JSON.stringify({
-          id,
-          content,
-          name,
-          permanent: permanent === 1,
-          createdAt: new Date(createdAt).toISOString(),
-          updatedAt: new Date(updatedAt).toISOString(),
-          ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}),
-          owner,
-          sharedWith: sharedWithArr,
-          version,
-        })
-      );
+      const compact = await compressContentCompact(content, adapter.dialect);
 
       await adapter.execute(
-        `INSERT INTO pastes (id, name, payload, permanent, created_at, updated_at, expires_at, owner, shared_with, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, name, payload, permanent, createdAt, updatedAt, expiresAt, owner, JSON.stringify(sharedWithArr), version]
+        `INSERT INTO pastes (
+          id, name, payload, permanent, sliding_ttl, raw_bytes, stored_bytes,
+          created_at, updated_at, expires_at, owner, shared_with, version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          name,
+          compact.payload,
+          permanent,
+          permanent === 1 ? 0 : 1,
+          compact.rawBytes,
+          compact.storedBytes,
+          createdAt,
+          updatedAt,
+          expiresAt,
+          owner,
+          JSON.stringify(sharedWithArr),
+          version,
+        ]
       );
     } catch {
       // Skip unreadable file
@@ -295,12 +299,16 @@ async function migrateJsonPasteFiles(adapter: SqlAdapter, dataDir: string): Prom
 export async function runLegacyMigrations(adapter: SqlAdapter, dataDir: string): Promise<void> {
   await backfillLegacyPastesRows(adapter);
 
-  if (await getMeta(adapter, 'legacy_json_stores_migrated')) return;
+  if (!(await getMeta(adapter, 'legacy_json_stores_migrated'))) {
+    await migrateUsersJson(adapter, dataDir);
+    await migrateSessionsJson(adapter, dataDir);
+    await migratePasskeysJson(adapter, dataDir);
+    await migrateJsonPasteFiles(adapter, dataDir);
+    await setMeta(adapter, 'legacy_json_stores_migrated', '1');
+  }
 
-  await migrateUsersJson(adapter, dataDir);
-  await migrateSessionsJson(adapter, dataDir);
-  await migratePasskeysJson(adapter, dataDir);
-  await migrateJsonPasteFiles(adapter, dataDir);
-
-  await setMeta(adapter, 'legacy_json_stores_migrated', '1');
+  if (!(await getMeta(adapter, 'pastes_v22_compact'))) {
+    await compactAllPastes(adapter);
+    await setMeta(adapter, 'pastes_v22_compact', '1');
+  }
 }

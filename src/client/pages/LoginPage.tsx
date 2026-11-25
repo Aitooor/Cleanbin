@@ -129,6 +129,13 @@ export default function LoginPage() {
         body: JSON.stringify({ email: email.trim(), password }),
       });
       const data = await response.json().catch(() => ({}));
+      if (response.ok && data.verificationEmailSent) {
+        addNotification('Verification link sent. Check your email to finish 2FA setup.');
+        setPassword('');
+        setConfirmPassword('');
+        setMode('login');
+        return;
+      }
       if (response.ok && data.setupRequired && typeof data.challenge === 'string') {
         addNotification('Account created. Configure mandatory 2FA to finish.');
         navigate(`/setup?challenge=${encodeURIComponent(data.challenge)}`);

@@ -14,6 +14,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard', label: 'overview' },
   { href: '/dashboard/pastes', label: 'pastes' },
   { href: '/dashboard/users', label: 'users', adminOnly: true },
+  { href: '/dashboard/settings', label: 'settings', adminOnly: true },
   { href: '/dashboard/account', label: 'account' },
 ];
 

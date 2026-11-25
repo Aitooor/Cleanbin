@@ -1,15 +1,20 @@
 import crypto from 'node:crypto';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getConfig } from '../config.js';
+import { getDb } from '../db/index.js';
+import { compressContentCompact } from '../db/compression.js';
 import { getOptionalActiveSession, requireSession } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { resolveOrigin } from '../services/auth.js';
 import {
   createPaste,
   deletePaste,
   getPaste,
   getPasteMetadata,
+  getUserPasteUsage,
   updatePaste,
+  type PasteMetadata,
 } from '../services/pastes.js';
 import {
   addPasteToCache,
@@ -18,7 +23,8 @@ import {
   updatePasteInCache,
 } from '../services/pastesCache.js';
 import { canEdit, getOwner, getSharedWith, isAdmin, isOwner } from '../services/pasteAccess.js';
-import { getUser } from '../services/users.js';
+import { getServerSettings } from '../services/settings.js';
+import { getAccountState, getUser } from '../services/users.js';
 import { heartbeat } from '../services/presence.js';
 import {
   isValidEmail,
@@ -27,8 +33,7 @@ import {
   MAX_PASTE_NAME_LENGTH,
   normalizeEmail,
 } from '../../shared/validation.js';
-
-import type { PasteTtlOption } from '../../shared/types.js';
+import type { PasteTtlOption, SessionRole } from '../../shared/types.js';
 
 export const pasteRoutes = new Hono();
 
@@ -45,7 +50,136 @@ const jsonBody1Mb = bodyLimit({
   onError: (c) => c.json({ message: 'Paste content is too large' }, 413),
 });
 
+const rawBody1Mb = bodyLimit({
+  maxSize: 1_100_000,
+  onError: (c) => c.text('Paste content is too large\n', 413),
+});
+
+function hasExplicitBearerHeader(c: Context): boolean {
+  const header = c.req.header('authorization');
+  return Boolean(header && /^Bearer\s+/i.test(header));
+}
+
+async function checkQuotaBeforeCreate(
+  ownerEmail: string | null,
+  role: SessionRole | null,
+  content: string
+): Promise<string | null> {
+  if (!ownerEmail || role === 'admin') return null;
+
+  const [settings, usage, db] = await Promise.all([
+    getServerSettings(),
+    getUserPasteUsage(ownerEmail),
+    getDb(),
+  ]);
+
+  if (settings.maxPastesPerUser > 0 && usage.pasteCount >= settings.maxPastesPerUser) {
+    return `Paste limit reached (${settings.maxPastesPerUser} pastes max). Delete unused pastes first.`;
+  }
+
+  if (settings.maxStorageMbPerUser > 0) {
+    const compact = await compressContentCompact(content, db.dialect);
+    const maxBytes = Math.round(settings.maxStorageMbPerUser * 1024 * 1024);
+    if (usage.storedBytes + compact.storedBytes > maxBytes) {
+      return `Disk quota reached (${settings.maxStorageMbPerUser} MB max on disk).`;
+    }
+  }
+
+  return null;
+}
+
+async function checkQuotaBeforeUpdate(meta: PasteMetadata, content: string): Promise<string | null> {
+  if (!meta.owner) return null;
+  const ownerState = await getAccountState(meta.owner);
+  if (!ownerState || ownerState.role === 'admin') return null;
+
+  const [settings, usage, db] = await Promise.all([
+    getServerSettings(),
+    getUserPasteUsage(meta.owner),
+    getDb(),
+  ]);
+
+  if (settings.maxStorageMbPerUser > 0) {
+    const compact = await compressContentCompact(content, db.dialect);
+    const maxBytes = Math.round(settings.maxStorageMbPerUser * 1024 * 1024);
+    const projected = Math.max(0, usage.storedBytes - meta.storedBytes) + compact.storedBytes;
+    if (projected > maxBytes) {
+      return `Disk quota reached (${settings.maxStorageMbPerUser} MB max on disk).`;
+    }
+  }
+
+  return null;
+}
+
+async function handleCliRawUpload(c: Context): Promise<Response> {
+  const session = await getOptionalActiveSession(c);
+  if (hasExplicitBearerHeader(c) && !session) {
+    return c.text('Invalid or revoked API token\n', 401);
+  }
+
+  const content = await c.req.text().catch(() => '');
+  if (!content) {
+    return c.text('Content is required\n', 400);
+  }
+  if (content.length > MAX_PASTE_CONTENT_LENGTH) {
+    return c.text('Paste content is too large\n', 413);
+  }
+
+  const rawTtl = (c.req.header('x-ttl') || c.req.query('ttl') || '').trim().toLowerCase();
+  if (rawTtl && !VALID_TTL_OPTIONS.has(rawTtl as PasteTtlOption)) {
+    return c.text('Invalid TTL (use 1h, 24h, 7d, 30d, burn, or permanent)\n', 400);
+  }
+  const ttlOption = rawTtl ? (rawTtl as PasteTtlOption) : undefined;
+
+  if (ttlOption === 'permanent' && !session) {
+    return c.text('Authentication required for permanent pastes (Authorization: Bearer cb_...)\n', 401);
+  }
+
+  const permanent = Boolean(session && ttlOption === 'permanent');
+  const burnAfterRead = !permanent && ttlOption === 'burn';
+  const owner = session ? normalizeEmail(session.email) : null;
+
+  const filenameParam = c.req.param('filename') ? decodeURIComponent(c.req.param('filename')!) : '';
+  let trimmedName = (c.req.header('x-name') || c.req.query('name') || filenameParam || '').trim();
+  if (permanent && !trimmedName) {
+    trimmedName = `cli-${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
+  }
+  if (trimmedName.length > MAX_PASTE_NAME_LENGTH) {
+    trimmedName = trimmedName.slice(0, MAX_PASTE_NAME_LENGTH);
+  }
+
+  const quotaError = await checkQuotaBeforeCreate(owner, session?.role ?? null, content);
+  if (quotaError) {
+    return c.text(`${quotaError}\n`, 403);
+  }
+
+  const id = crypto.randomUUID();
+  const created = await createPaste(id, content, trimmedName, permanent, owner, {
+    ttl: ttlOption,
+    burnAfterRead,
+  });
+  try {
+    addPasteToCache(created);
+  } catch {
+    invalidateCache();
+  }
+
+  c.header('Content-Type', 'text/plain; charset=utf-8');
+  c.header('Cache-Control', 'no-store');
+  return c.body(`${resolveOrigin(c)}/${id}\n`, 201);
+}
+
+pasteRoutes.post('/raw', createLimiter, rawBody1Mb, handleCliRawUpload);
+pasteRoutes.put('/raw', createLimiter, rawBody1Mb, handleCliRawUpload);
+pasteRoutes.put('/raw/:filename', createLimiter, rawBody1Mb, handleCliRawUpload);
+pasteRoutes.post('/api/raw', createLimiter, rawBody1Mb, handleCliRawUpload);
+
 pasteRoutes.post('/api/paste', createLimiter, jsonBody1Mb, async (c) => {
+  const session = await getOptionalActiveSession(c);
+  if (hasExplicitBearerHeader(c) && !session) {
+    return c.json({ message: 'Invalid or revoked API token' }, 401);
+  }
+
   const body = await c.req.json().catch(() => null);
   const {
     content,
@@ -67,7 +201,6 @@ pasteRoutes.post('/api/paste', createLimiter, jsonBody1Mb, async (c) => {
       ? (bodyTtl as PasteTtlOption)
       : undefined;
 
-  const session = await getOptionalActiveSession(c);
   const isLoggedIn = !!session;
   const wantsPermanent =
     ttlOption === 'permanent' ||
@@ -82,6 +215,11 @@ pasteRoutes.post('/api/paste', createLimiter, jsonBody1Mb, async (c) => {
   }
   if (permanent && !trimmedName) {
     return c.json({ message: 'Name is required for permanent pastes.' }, 400);
+  }
+
+  const quotaError = await checkQuotaBeforeCreate(owner, session?.role ?? null, content);
+  if (quotaError) {
+    return c.json({ message: quotaError, error: quotaError }, 403);
   }
 
   const id = crypto.randomUUID();
@@ -248,6 +386,10 @@ pasteRoutes.patch('/api/paste/:id', jsonBody1Mb, async (c) => {
     }
     if (content.length > MAX_PASTE_CONTENT_LENGTH) {
       return c.json({ message: 'Paste content is too large' }, 413);
+    }
+    const quotaError = await checkQuotaBeforeUpdate(meta, content);
+    if (quotaError) {
+      return c.json({ message: quotaError, error: quotaError }, 403);
     }
     patch.content = content;
   }

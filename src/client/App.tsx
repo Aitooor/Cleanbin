@@ -10,6 +10,7 @@ import SetupPage from './pages/SetupPage';
 import OverviewPage from './pages/dashboard/OverviewPage';
 import PastesPage from './pages/dashboard/PastesPage';
 import UsersPage from './pages/dashboard/UsersPage';
+import SettingsPage from './pages/dashboard/SettingsPage';
 import AccountPage from './pages/dashboard/AccountPage';
 
 const isDemo = import.meta.env.VITE_DEMO_MODE === '1';
@@ -54,6 +55,7 @@ export default function App() {
               <Route index element={<OverviewPage />} />
               <Route path="pastes" element={<PastesPage />} />
               <Route path="users" element={<UsersPage />} />
+              <Route path="settings" element={<SettingsPage />} />
               <Route path="account" element={<AccountPage />} />
             </Route>
 

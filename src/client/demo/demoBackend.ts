@@ -3,7 +3,7 @@
 // Stores data strictly in JS heap memory for the lifetime of the browser tab;
 // nothing is ever persisted to disk, cookies, localStorage, or any external server.
 
-import type { PasteFilterRule, PasteTtlOption, RegistrationMode } from '../../shared/types';
+import type { ApiTokenInfo, PasteFilterRule, PasteTtlOption, RegistrationMode, StorageStats } from '../../shared/types';
 
 interface DemoPaste {
   id: string;
@@ -44,9 +44,37 @@ interface DemoSession {
 let pastes = new Map<string, DemoPaste>();
 let users = new Map<string, DemoUser>();
 let sessions: DemoSession[] = [];
+let demoTokens: ApiTokenInfo[] = [];
 let currentUser: { email: string; role: 'admin' | 'user'; permanentDeleteLimit: number | null } | null = null;
 let demoRegistrationMode: RegistrationMode = 'invite';
+let demoRequireEmailVerification = false;
 let demoDefaultDeleteLimit = 2;
+let demoMaxPastesPerUser = 100;
+let demoMaxStorageMbPerUser = 10;
+
+function estimateCompressedBytes(text: string): number {
+  const raw = new TextEncoder().encode(text).byteLength;
+  if (raw <= 12) return raw + 1;
+  return Math.max(14, Math.round(raw * 0.22));
+}
+
+function computeDemoStorageStats(): StorageStats {
+  let rawBytes = 0;
+  let storedBytes = 0;
+  for (const p of pastes.values()) {
+    rawBytes += new TextEncoder().encode(p.content).byteLength;
+    storedBytes += estimateCompressedBytes(p.content);
+  }
+  const savingsPercent =
+    rawBytes > 0 ? Math.max(0, Math.round((1 - storedBytes / rawBytes) * 1000) / 10) : 0;
+  return {
+    pasteCount: pastes.size,
+    rawBytes,
+    storedBytes,
+    dbFileBytes: storedBytes + 16_384,
+    savingsPercent,
+  };
+}
 
 export function resetDemoState(): void {
   const now = Date.now();
@@ -54,7 +82,19 @@ export function resetDemoState(): void {
 
   currentUser = { email: 'demo@example.com', role: 'admin', permanentDeleteLimit: null };
   demoRegistrationMode = 'invite';
+  demoRequireEmailVerification = false;
   demoDefaultDeleteLimit = 2;
+  demoMaxPastesPerUser = 100;
+  demoMaxStorageMbPerUser = 10;
+  demoTokens = [
+    {
+      id: 'demo-tok-1',
+      name: 'workstation-cli',
+      tokenPrefix: 'cb_9xK2mPq',
+      createdAt: iso(-5 * 86400_000),
+      lastUsedAt: iso(-1800_000),
+    },
+  ];
 
   users = new Map<string, DemoUser>([
     [
@@ -239,6 +279,26 @@ export function snapshotDatabase(dbPath: string, outDir: string): string {
       sharedWith: [],
       version: 1,
     },
+    {
+      id: 'release-notes-md',
+      name: 'RELEASE.md',
+      content: `# Cleanbin v2.2 Highlights
+
+- **CLI Raw Upload**: \`cat app.log | curl -fsS --data-binary @- https://cleanbin.xyz/raw\`
+- **Personal API Tokens**: Revocable \`cb_...\` tokens hashed with SHA-256
+- **Ultra-Compact Storage**: Pure Brotli-11 binary payloads with SQLite \`VACUUM\`
+
+| Layer | Footprint |
+| :--- | :--- |
+| Metadata | Indexed SQL columns |
+| Content | Brotli quality 11 (\`BROTLI_MODE_TEXT\`) |`,
+      permanent: true,
+      createdAt: iso(-6 * 3600_000),
+      updatedAt: iso(-6 * 3600_000),
+      owner: 'demo@example.com',
+      sharedWith: [],
+      version: 1,
+    },
   ];
 
   pastes = new Map(seed.map((p) => [p.id, p]));
@@ -354,11 +414,22 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
   const path = url.pathname;
   const baseUrl = import.meta.env.BASE_URL || '/Cleanbin/';
 
-  // Settings (/api/settings)
+  // Settings (/api/settings & /api/settings/compact)
   if (path === '/api/settings' && method === 'GET') {
+    if (currentUser?.role === 'admin') {
+      return jsonResponse({
+        registrationMode: demoRegistrationMode,
+        requireEmailVerification: demoRequireEmailVerification,
+        mailerConfigured: true,
+        defaultUserDeleteLimit: demoDefaultDeleteLimit,
+        maxPastesPerUser: demoMaxPastesPerUser,
+        maxStorageMbPerUser: demoMaxStorageMbPerUser,
+        storage: computeDemoStorageStats(),
+      });
+    }
     return jsonResponse({
       registrationMode: demoRegistrationMode,
-      ...(currentUser?.role === 'admin' ? { defaultUserDeleteLimit: demoDefaultDeleteLimit } : {}),
+      requireEmailVerification: demoRequireEmailVerification,
     });
   }
 
@@ -368,13 +439,74 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     if (body.registrationMode === 'invite' || body.registrationMode === 'open') {
       demoRegistrationMode = body.registrationMode;
     }
+    if (typeof body.requireEmailVerification === 'boolean') {
+      demoRequireEmailVerification = body.requireEmailVerification;
+    }
     if (typeof body.defaultUserDeleteLimit === 'number' && body.defaultUserDeleteLimit >= 0) {
       demoDefaultDeleteLimit = Math.floor(body.defaultUserDeleteLimit);
     }
+    if (typeof body.maxPastesPerUser === 'number' && body.maxPastesPerUser >= 0) {
+      demoMaxPastesPerUser = Math.floor(body.maxPastesPerUser);
+    }
+    if (typeof body.maxStorageMbPerUser === 'number' && body.maxStorageMbPerUser >= 0) {
+      demoMaxStorageMbPerUser = Math.round(body.maxStorageMbPerUser * 100) / 100;
+    }
     return jsonResponse({
       registrationMode: demoRegistrationMode,
+      requireEmailVerification: demoRequireEmailVerification,
+      mailerConfigured: true,
       defaultUserDeleteLimit: demoDefaultDeleteLimit,
+      maxPastesPerUser: demoMaxPastesPerUser,
+      maxStorageMbPerUser: demoMaxStorageMbPerUser,
+      storage: computeDemoStorageStats(),
     });
+  }
+
+  if (path === '/api/settings/compact' && method === 'POST') {
+    if (currentUser?.role !== 'admin') return jsonResponse({ message: 'Forbidden' }, 403);
+    return jsonResponse({ storage: computeDemoStorageStats() });
+  }
+
+  // Personal API tokens (/api/tokens)
+  if (path === '/api/tokens' && method === 'GET') {
+    if (!currentUser) return jsonResponse({ message: 'Unauthorized' }, 401);
+    const owned = Array.from(pastes.values()).filter((p) => p.owner === currentUser!.email);
+    const rawBytes = owned.reduce((acc, p) => acc + new TextEncoder().encode(p.content).byteLength, 0);
+    const storedBytes = owned.reduce((acc, p) => acc + estimateCompressedBytes(p.content), 0);
+    return jsonResponse({
+      tokens: demoTokens,
+      usage: {
+        pasteCount: owned.length,
+        rawBytes,
+        storedBytes,
+        maxPastesPerUser: currentUser.role === 'admin' ? 0 : demoMaxPastesPerUser,
+        maxStorageMbPerUser: currentUser.role === 'admin' ? 0 : demoMaxStorageMbPerUser,
+      },
+    });
+  }
+
+  if (path === '/api/tokens' && method === 'POST') {
+    if (!currentUser) return jsonResponse({ message: 'Unauthorized' }, 401);
+    const body = await parseJson(init);
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) return jsonResponse({ message: 'Token label is required' }, 400);
+    const rawToken = `cb_demo_${randomShortId()}${randomShortId()}${randomShortId()}`;
+    const item: ApiTokenInfo = {
+      id: `demo-tok-${randomShortId()}`,
+      name,
+      tokenPrefix: rawToken.slice(0, 10),
+      createdAt: new Date().toISOString(),
+      lastUsedAt: null,
+    };
+    demoTokens = [item, ...demoTokens];
+    return jsonResponse({ token: rawToken, item }, 201);
+  }
+
+  if (path.startsWith('/api/tokens/') && method === 'DELETE') {
+    if (!currentUser) return jsonResponse({ message: 'Unauthorized' }, 401);
+    const tokId = decodeURIComponent(path.slice('/api/tokens/'.length));
+    demoTokens = demoTokens.filter((t) => t.id !== tokId);
+    return jsonResponse({ success: true });
   }
 
   if (path === '/api/auth/register' && method === 'POST') {
@@ -715,7 +847,16 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
 
   // Team accounts (/api/users)
   if (path === '/api/users' && method === 'GET') {
-    return jsonResponse(Array.from(users.values()));
+    const list = Array.from(users.values()).map((u) => {
+      const owned = Array.from(pastes.values()).filter((p) => p.owner === u.email);
+      const storedBytes = owned.reduce((acc, p) => acc + estimateCompressedBytes(p.content), 0);
+      return {
+        ...u,
+        pasteCount: owned.length,
+        storedBytes,
+      };
+    });
+    return jsonResponse(list);
   }
 
   if (path === '/api/users' && method === 'POST') {

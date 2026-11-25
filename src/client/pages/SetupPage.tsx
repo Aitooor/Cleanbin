@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { renderSVG } from 'uqr';
 import { useNotification } from '../components/NotificationProvider';
 import { useSession } from '../hooks/useSession';
 
@@ -42,13 +43,28 @@ export default function SetupPage() {
 
   const token = searchParams.get('token');
   const challenge = searchParams.get('challenge');
+  const preVerifiedPassword = searchParams.get('verified') === '1';
 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [needsPasswordForm, setNeedsPasswordForm] = useState(Boolean(token && !preVerifiedPassword));
   const [secret, setSecret] = useState<SetupSecret | null>(null);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
+
+  const qrSvg = useMemo(() => {
+    if (!secret?.otpauthUrl) return '';
+    try {
+      return renderSVG(secret.otpauthUrl, {
+        whiteColor: '#181818',
+        blackColor: '#e0e0e0',
+        border: 1,
+      });
+    } catch {
+      return '';
+    }
+  }, [secret]);
 
   const requestSecret = async (payload: Record<string, string>) => {
     setBusy(true);
@@ -60,9 +76,14 @@ export default function SetupPage() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (data.needsPassword) {
+          setNeedsPasswordForm(true);
+          return;
+        }
         addNotification(data.message || 'Could not start the setup.');
         return;
       }
+      setNeedsPasswordForm(false);
       setSecret({ groupedSecret: data.groupedSecret, otpauthUrl: data.otpauthUrl });
     } catch {
       addNotification('Could not start the setup.');
@@ -78,9 +99,11 @@ export default function SetupPage() {
     }
     if (challenge) {
       void requestSecret({ challenge });
+    } else if (token && preVerifiedPassword) {
+      void requestSecret({ token });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, challenge]);
+  }, [token, challenge, preVerifiedPassword]);
 
   const handlePasswordSubmit = async () => {
     if (busy || !token) return;
@@ -129,7 +152,7 @@ export default function SetupPage() {
     if (e.key !== 'Enter') return;
     if (secret) {
       void handleActivate();
-    } else if (token) {
+    } else if (token && needsPasswordForm) {
       void handlePasswordSubmit();
     }
   };
@@ -168,7 +191,7 @@ export default function SetupPage() {
           <p style={{ margin: '8px 0 0', fontSize: 12, color: '#e07a7a', lineHeight: 1.5 }}>{fatal}</p>
         )}
 
-        {!fatal && !secret && token && (
+        {!fatal && !secret && token && needsPasswordForm && (
           <>
             <p style={{ margin: '0 0 16px', fontSize: 12, color: '#888', lineHeight: 1.5 }}>
               Step 1 of 2 · Choose a password (10+ characters) to activate your account.
@@ -201,8 +224,29 @@ export default function SetupPage() {
         {!fatal && secret && (
           <>
             <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888', lineHeight: 1.5 }}>
-              Step 2 of 2 · Add this secret key to your authenticator app, then enter the 6-digit code.
+              Scan this QR code or enter the secret key in your authenticator app, then type the 6-digit code.
             </p>
+
+            {qrSvg && (
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  margin: '0 0 12px',
+                  padding: 12,
+                  background: '#181818',
+                  border: '1px solid #333',
+                  borderRadius: 4,
+                }}
+              >
+                <div
+                  aria-label="Authenticator QR code"
+                  style={{ width: 164, height: 164, lineHeight: 0 }}
+                  dangerouslySetInnerHTML={{ __html: qrSvg }}
+                />
+              </div>
+            )}
+
             <div
               style={{
                 margin: '0 0 12px',
@@ -217,9 +261,6 @@ export default function SetupPage() {
                 {secret.groupedSecret}
               </code>
             </div>
-            <p style={{ margin: '0 0 14px', fontSize: 11, color: '#666', lineHeight: 1.5, wordBreak: 'break-all' }}>
-              {secret.otpauthUrl}
-            </p>
             <input
               type="text"
               inputMode="numeric"
@@ -248,7 +289,7 @@ export default function SetupPage() {
           </>
         )}
 
-        {!fatal && !token && !secret && (
+        {!fatal && !secret && (!token || !needsPasswordForm) && (
           <p style={{ margin: '12px 0 0', fontSize: 12, color: '#888' }}>Preparing setup…</p>
         )}
       </div>

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { requireSession } from '../middleware/auth.js';
+import { requireBrowserSession } from '../middleware/auth.js';
 import { clearSessionCookie } from '../services/auth.js';
 import {
   getSession,
@@ -24,7 +24,7 @@ function toPublicSession(record: SessionRecord, currentId: string): DashboardSes
 }
 
 sessionsRoutes.get('/api/sessions', async (c) => {
-  const session = await requireSession(c);
+  const session = await requireBrowserSession(c);
   if (session instanceof Response) return session;
 
   const records = await listUserSessions(session.email);
@@ -35,7 +35,7 @@ sessionsRoutes.get('/api/sessions', async (c) => {
 });
 
 sessionsRoutes.delete('/api/sessions', async (c) => {
-  const session = await requireSession(c);
+  const session = await requireBrowserSession(c);
   if (session instanceof Response) return session;
 
   await revokeSession(session.sid);
@@ -44,7 +44,7 @@ sessionsRoutes.delete('/api/sessions', async (c) => {
 });
 
 sessionsRoutes.delete('/api/sessions/:id', async (c) => {
-  const session = await requireSession(c);
+  const session = await requireBrowserSession(c);
   if (session instanceof Response) return session;
 
   const id = c.req.param('id');

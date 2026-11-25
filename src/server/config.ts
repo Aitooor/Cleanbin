@@ -67,6 +67,13 @@ function resolveCompressionType(raw: string | undefined): CompressionType {
   return 'brotli';
 }
 
+function toBrotliQuality(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(11, Math.max(0, parsed));
+}
+
 export function getConfig(): AppConfig {
   const dataDir = getDataDir();
   return {
@@ -83,7 +90,7 @@ export function getConfig(): AppConfig {
     },
     compression: {
       type: resolveCompressionType(process.env.COMPRESSION_TYPE || process.env.COMPRESSION__TYPE),
-      quality: toInt(process.env.COMPRESSION_QUALITY || process.env.COMPRESSION__QUALITY, 6),
+      quality: toBrotliQuality(process.env.COMPRESSION_QUALITY || process.env.COMPRESSION__QUALITY, 11),
     },
     rateLimit: {
       pastePerMin: toInt(process.env.RATE_LIMIT_PASTE_PER_MIN, 30),

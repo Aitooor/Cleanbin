@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { FiClipboard, FiEdit2, FiRefreshCw, FiShield, FiTrash2 } from 'react-icons/fi';
 import { Button, ConfirmModal, type ConfirmRequest, IconButton, Modal } from '../../components/CleanUi';
 import { useNotification } from '../../components/NotificationProvider';
 import { useSession } from '../../hooks/useSession';
-import { formatDate } from '../../utils/format';
-import type { DashboardUser, RegistrationMode, SessionRole } from '../../../shared/types';
+import { formatBytes, formatDate } from '../../utils/format';
+import type { DashboardUser, SessionRole } from '../../../shared/types';
 
 export default function UsersPage() {
   const { role } = useSession();
@@ -13,9 +14,6 @@ export default function UsersPage() {
 
   const [users, setUsers] = useState<DashboardUser[]>([]);
   const [loading, setLoading] = useState(true);
-  const [regMode, setRegMode] = useState<RegistrationMode>('invite');
-  const [defaultCapInput, setDefaultCapInput] = useState('2');
-  const [settingsBusy, setSettingsBusy] = useState(false);
   const [email, setEmail] = useState('');
   const [newRole, setNewRole] = useState<SessionRole>('user');
   const [limitInput, setLimitInput] = useState('2');
@@ -57,11 +55,8 @@ export default function UsersPage() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!active || !data) return;
-        if (data.registrationMode === 'open' || data.registrationMode === 'invite') {
-          setRegMode(data.registrationMode);
-        }
         if (typeof data.defaultUserDeleteLimit === 'number') {
-          setDefaultCapInput(String(data.defaultUserDeleteLimit));
+          setLimitInput(String(data.defaultUserDeleteLimit));
         }
       })
       .catch(() => {});
@@ -69,43 +64,6 @@ export default function UsersPage() {
       active = false;
     };
   }, [isAdmin]);
-
-  const handleSaveSettings = async (nextMode?: RegistrationMode) => {
-    if (settingsBusy) return;
-    const cap = Number(defaultCapInput);
-    if (!Number.isInteger(cap) || cap < 0) {
-      addNotification('Default permanent delete cap must be >= 0.');
-      return;
-    }
-    const modeToSave = nextMode ?? regMode;
-    setSettingsBusy(true);
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          registrationMode: modeToSave,
-          defaultUserDeleteLimit: cap,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setRegMode(data.registrationMode ?? modeToSave);
-        if (typeof data.defaultUserDeleteLimit === 'number') {
-          setDefaultCapInput(String(data.defaultUserDeleteLimit));
-        }
-        addNotification(
-          modeToSave === 'open'
-            ? 'Registration set to open (new accounts still require 2FA).'
-            : 'Registration set to invite-only.'
-        );
-      } else {
-        addNotification(data.message || 'Failed to save registration settings.');
-      }
-    } finally {
-      setSettingsBusy(false);
-    }
-  };
 
   if (!isAdmin) {
     return <div className="cb-empty">Administrator role is required to manage accounts.</div>;
@@ -246,58 +204,13 @@ export default function UsersPage() {
     <>
       <div className="cb-panel">
         <div className="cb-section-head">
-          <span className="cb-section-title">registration access</span>
-          <span className="cb-section-sub">
-            {regMode === 'open'
-              ? 'Open registration enabled on /login (mandatory 2FA setup on first sign-in).'
-              : 'Invite-only · only administrators can create accounts.'}
-          </span>
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div className="cb-field">
-            <span className="cb-label">mode</span>
-            <div className="cb-tabs" style={{ marginBottom: 0 }}>
-              <button
-                type="button"
-                className={`cb-tab ${regMode === 'invite' ? 'cb-tab--active' : ''}`.trim()}
-                disabled={settingsBusy}
-                onClick={() => void handleSaveSettings('invite')}
-              >
-                invite only
-              </button>
-              <button
-                type="button"
-                className={`cb-tab ${regMode === 'open' ? 'cb-tab--active' : ''}`.trim()}
-                disabled={settingsBusy}
-                onClick={() => void handleSaveSettings('open')}
-              >
-                open registration
-              </button>
-            </div>
-          </div>
-
-          <label className="cb-field" style={{ width: 150 }}>
-            <span className="cb-label">default perm delete cap</span>
-            <input
-              type="number"
-              min={0}
-              className="cb-input"
-              value={defaultCapInput}
-              onChange={(e) => setDefaultCapInput(e.target.value)}
-            />
-          </label>
-
-          <Button disabled={settingsBusy} onClick={() => void handleSaveSettings()}>
-            Save cap
-          </Button>
-        </div>
-      </div>
-
-      <div className="cb-panel">
-        <div className="cb-section-head">
           <span className="cb-section-title">invite account</span>
-          <span className="cb-section-sub">Invitee sets password + mandatory 2FA via one-time link.</span>
+          <span className="cb-section-sub">
+            Invitee sets password + mandatory 2FA via one-time link ·{' '}
+            <Link to="/dashboard/settings" style={{ color: '#64b5f6' }}>
+              registration & quotas →
+            </Link>
+          </span>
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -359,6 +272,7 @@ export default function UsersPage() {
               <tr>
                 <th>email</th>
                 <th>role</th>
+                <th>usage</th>
                 <th>cap</th>
                 <th>status</th>
                 <th>2fa</th>
@@ -378,6 +292,9 @@ export default function UsersPage() {
                     <span className={`cb-tag ${u.role === 'admin' ? 'cb-tag--accent' : ''}`}>
                       {u.role}
                     </span>
+                  </td>
+                  <td style={{ color: '#888', whiteSpace: 'nowrap' }}>
+                    {u.pasteCount ?? 0} · {formatBytes(u.storedBytes ?? 0)}
                   </td>
                   <td style={{ color: '#888' }}>{u.role === 'admin' ? '∞' : u.permanentDeleteLimit}</td>
                   <td>
