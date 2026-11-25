@@ -534,14 +534,28 @@ export default function PastesPage() {
                       <IconButton
                         label="Open"
                         size="sm"
-                        onClick={() => window.open(`/${row.id}`, '_blank')}
+                        onClick={() =>
+                          window.open(
+                            import.meta.env.VITE_DEMO_MODE === '1'
+                              ? `${import.meta.env.BASE_URL}#/${row.id}`
+                              : `/${row.id}`,
+                            '_blank'
+                          )
+                        }
                       >
                         <FiEye size={14} />
                       </IconButton>
                       <IconButton
                         label="Copy URL"
                         size="sm"
-                        onClick={() => copyText(`${window.location.origin}/${row.id}`, 'URL copied')}
+                        onClick={() =>
+                          copyText(
+                            import.meta.env.VITE_DEMO_MODE === '1'
+                              ? `${window.location.origin}${import.meta.env.BASE_URL}#/${row.id}`
+                              : `${window.location.origin}/${row.id}`,
+                            'URL copied'
+                          )
+                        }
                       >
                         <FiClipboard size={14} />
                       </IconButton>
