@@ -537,7 +537,7 @@ export default function PasteViewPage() {
   const handleStatePatch = async (patch: { visibility?: PasteVisibility; ttl?: PasteTtlOption }) => {
     if (!id || stateBusy || !canManageState) return;
     const effectiveName = stateName.trim() || name.trim();
-    if (patch.ttl === 'permanent' && !effectiveName) {
+    if (patch.ttl === 'permanent' && !effectiveName && !isEncrypted) {
       addNotification('Enter a name first before switching to Permanent.');
       return;
     }
@@ -545,7 +545,10 @@ export default function PasteViewPage() {
     setStateBusy(true);
     try {
       const payload: Record<string, unknown> = { ...patch };
-      if (stateName.trim() && stateName.trim() !== name.trim()) {
+      if (isEncrypted && patch.ttl === 'permanent') {
+        // Keep the decrypted title private inside the E2EE payload; send generic label for server perm validation.
+        payload.name = 'Encrypted paste';
+      } else if (stateName.trim() && stateName.trim() !== name.trim()) {
         payload.name = stateName.trim();
       }
       const res = await fetch(`/api/paste/${encodeURIComponent(id)}`, {
