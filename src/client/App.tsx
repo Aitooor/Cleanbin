@@ -1,5 +1,5 @@
-import React from 'react';
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import React, { Suspense, lazy } from 'react';
+import { BrowserRouter, HashRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { NotificationProvider } from './components/NotificationProvider';
 import DashboardShell from './components/DashboardShell';
 import { SessionProvider, useSession } from './hooks/useSession';
@@ -11,6 +11,9 @@ import OverviewPage from './pages/dashboard/OverviewPage';
 import PastesPage from './pages/dashboard/PastesPage';
 import UsersPage from './pages/dashboard/UsersPage';
 import AccountPage from './pages/dashboard/AccountPage';
+
+const isDemo = import.meta.env.VITE_DEMO_MODE === '1';
+const DemoBanner = isDemo ? lazy(() => import('./demo/DemoBanner')) : null;
 
 function ProtectedDashboard() {
   const { loading, authenticated } = useSession();
@@ -34,11 +37,13 @@ function ProtectedDashboard() {
   );
 }
 
+const Router = isDemo ? HashRouter : BrowserRouter;
+
 export default function App() {
   return (
     <NotificationProvider>
       <SessionProvider>
-        <BrowserRouter>
+        <Router>
           <Routes>
             <Route path="/" element={<EditorPage />} />
             <Route path="/clone/:id" element={<EditorPage cloneMode />} />
@@ -54,7 +59,12 @@ export default function App() {
 
             <Route path="/:id" element={<PasteViewPage />} />
           </Routes>
-        </BrowserRouter>
+          {DemoBanner && (
+            <Suspense fallback={null}>
+              <DemoBanner />
+            </Suspense>
+          )}
+        </Router>
       </SessionProvider>
     </NotificationProvider>
   );

@@ -135,7 +135,14 @@ export default function OverviewPage() {
                     <IconButton
                       label="Open paste"
                       size="sm"
-                      onClick={() => window.open(`/${row.id}`, '_blank')}
+                      onClick={() =>
+                        window.open(
+                          import.meta.env.VITE_DEMO_MODE === '1'
+                            ? `${import.meta.env.BASE_URL}#/${row.id}`
+                            : `/${row.id}`,
+                          '_blank'
+                        )
+                      }
                     >
                       <FiExternalLink size={14} />
                     </IconButton>

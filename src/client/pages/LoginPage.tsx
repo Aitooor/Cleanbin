@@ -206,6 +206,33 @@ export default function LoginPage() {
             <button onClick={() => void handleLogin()} style={{ width: '100%', fontWeight: 600 }}>
               Login
             </button>
+            {import.meta.env.VITE_DEMO_MODE === '1' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail('demo@example.com');
+                  setPassword('demo');
+                  void fetch('/api/auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: 'demo@example.com', password: 'demo' }),
+                  }).then(async () => {
+                    await refreshSession();
+                    navigate('/dashboard');
+                  });
+                }}
+                style={{
+                  width: '100%',
+                  marginTop: 10,
+                  background: '#1e1e1e',
+                  color: '#e0e0e0',
+                  border: '1px solid #333',
+                  fontWeight: 600,
+                }}
+              >
+                Enter Demo Dashboard (demo@example.com)
+              </button>
+            )}
             {passkeyRegistered && (
               <>
                 <p style={{ margin: '18px 0 10px', fontSize: 11, color: '#666', textAlign: 'center' }}>

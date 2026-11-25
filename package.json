@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx scripts/dev.ts",
     "build": "vite build && tsc -p tsconfig.server.json",
+    "build:demo": "vite build",
     "start": "node dist/server/server/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
