@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { getConfig } from '../config.js';
-import { getOptionalActiveSession } from '../middleware/auth.js';
+import { getOptionalActiveSession, requireBrowserSession } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import {
   clearChallengeState,
@@ -15,12 +15,16 @@ import { buildSetupUrl } from '../services/invites.js';
 import { isMailerConfigured, sendRegistrationVerificationEmail } from '../services/mailer.js';
 import { hasPasskey } from '../services/passkeys.js';
 import { createUserSession } from '../services/sessions.js';
+import { buildOtpAuthUrl, groupSecret } from '../services/totp.js';
 import {
   createUser,
   deleteUser,
+  disableTotp,
+  enableTotp,
   getAccountState,
   getPermanentDeleteLimit,
   SETUP_PASSWORD_MIN_LENGTH,
+  startTotpSetup,
   UserExistsError,
   UserValidationError,
   verifyAndConsumeTotp,
@@ -50,17 +54,21 @@ authRoutes.get('/api/auth', async (c) => {
       authenticated: false,
       email: null,
       role: null,
+      totpEnabled: false,
       permanentDeleteLimit: null,
     });
   }
 
-  const limit =
-    session.role === 'admin' ? null : await getPermanentDeleteLimit(session.email);
+  const [limit, account] = await Promise.all([
+    session.role === 'admin' ? Promise.resolve(null) : getPermanentDeleteLimit(session.email),
+    getAccountState(session.email),
+  ]);
 
   return c.json({
     authenticated: true,
     email: session.email,
     role: session.role,
+    totpEnabled: Boolean(account?.totpEnabled),
     permanentDeleteLimit: typeof limit === 'number' && Number.isFinite(limit) ? limit : null,
   });
 });
@@ -110,9 +118,27 @@ authRoutes.post('/api/auth', loginLimiter, async (c) => {
     });
   }
 
+  // Only administrators are forced to configure 2FA before signing in;
+  // standard users can sign in with password alone and enable 2FA optionally.
+  if (auth.role === 'admin') {
+    return c.json({
+      setupRequired: true,
+      challenge: createAuthChallenge(auth.email, 'setup'),
+    });
+  }
+
+  const session = await createUserSession(
+    auth.email,
+    auth.role,
+    c.req.header('user-agent') ?? ''
+  );
+  setSessionCookie(c, auth.email, auth.role, session.id);
+
   return c.json({
-    setupRequired: true,
-    challenge: createAuthChallenge(auth.email, 'setup'),
+    authenticated: true,
+    message: 'Login successful',
+    email: auth.email,
+    role: auth.role,
   });
 });
 
@@ -171,11 +197,18 @@ authRoutes.post('/api/auth/register', loginLimiter, async (c) => {
       );
     }
 
+    const session = await createUserSession(
+      user.email,
+      user.role,
+      c.req.header('user-agent') ?? ''
+    );
+    setSessionCookie(c, user.email, user.role, session.id);
+
     return c.json(
       {
-        setupRequired: true,
+        authenticated: true,
         email: user.email,
-        challenge: createAuthChallenge(user.email, 'setup'),
+        role: user.role,
       },
       201
     );
@@ -227,4 +260,53 @@ authRoutes.post('/api/auth/2fa', totpLimiter, async (c) => {
     email: account.email,
     role: account.role,
   });
+});
+
+// Self-service optional TOTP management inside /dashboard/account
+authRoutes.post('/api/auth/totp/start', async (c) => {
+  const session = await requireBrowserSession(c);
+  if (session instanceof Response) return session;
+
+  const account = await getAccountState(session.email);
+  if (account?.totpEnabled) {
+    return c.json({ message: 'Two-factor authentication is already enabled.' }, 400);
+  }
+
+  const secret = await startTotpSetup(session.email);
+  return c.json({
+    secret,
+    groupedSecret: groupSecret(secret),
+    otpauthUrl: buildOtpAuthUrl(session.email, secret),
+  });
+});
+
+authRoutes.post('/api/auth/totp/enable', async (c) => {
+  const session = await requireBrowserSession(c);
+  if (session instanceof Response) return session;
+
+  const body = await c.req.json().catch(() => ({}));
+  const code = typeof (body as Record<string, unknown>)?.code === 'string'
+    ? ((body as Record<string, unknown>).code as string)
+    : '';
+  if (!/^\d{6}$/.test(code.trim())) {
+    return c.json({ message: 'A valid 6-digit verification code is required' }, 400);
+  }
+
+  const state = await enableTotp(session.email, code.trim());
+  if (!state) {
+    return c.json({ message: 'Invalid verification code' }, 401);
+  }
+  return c.json({ totpEnabled: true });
+});
+
+authRoutes.delete('/api/auth/totp', async (c) => {
+  const session = await requireBrowserSession(c);
+  if (session instanceof Response) return session;
+
+  if (session.role === 'admin') {
+    return c.json({ message: 'Two-factor authentication is mandatory for administrators.' }, 403);
+  }
+
+  await disableTotp(session.email);
+  return c.json({ totpEnabled: false });
 });

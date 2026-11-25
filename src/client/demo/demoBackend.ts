@@ -3,13 +3,21 @@
 // Stores data strictly in JS heap memory for the lifetime of the browser tab;
 // nothing is ever persisted to disk, cookies, localStorage, or any external server.
 
-import type { ApiTokenInfo, PasteFilterRule, PasteTtlOption, RegistrationMode, StorageStats } from '../../shared/types';
+import type {
+  ApiTokenInfo,
+  PasteFilterRule,
+  PasteTtlOption,
+  PasteVisibility,
+  RegistrationMode,
+  StorageStats,
+} from '../../shared/types';
 
 interface DemoPaste {
   id: string;
   name: string;
   content: string;
   permanent: boolean;
+  visibility?: PasteVisibility;
   burnAfterRead?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -50,6 +58,8 @@ let demoRegistrationMode: RegistrationMode = 'invite';
 let demoRequireEmailVerification = false;
 let demoDefaultDeleteLimit = 2;
 let demoMaxPastesPerUser = 100;
+let demoMaxPublicPastesPerUser = 0;
+let demoMaxPrivatePastesPerUser = 25;
 let demoMaxStorageMbPerUser = 10;
 
 function estimateCompressedBytes(text: string): number {
@@ -85,6 +95,8 @@ export function resetDemoState(): void {
   demoRequireEmailVerification = false;
   demoDefaultDeleteLimit = 2;
   demoMaxPastesPerUser = 100;
+  demoMaxPublicPastesPerUser = 0;
+  demoMaxPrivatePastesPerUser = 25;
   demoMaxStorageMbPerUser = 10;
   demoTokens = [
     {
@@ -332,7 +344,15 @@ function decoratePaste(item: DemoPaste) {
   const mine = Boolean(email && item.owner === email);
   const sharedWithMe = Boolean(email && item.sharedWith.includes(email));
   const canEdit = Boolean(currentUser && (currentUser.role === 'admin' || mine || sharedWithMe));
-  return { ...item, mine, sharedWithMe, canEdit };
+  const canManageState = Boolean(currentUser && (currentUser.role === 'admin' || mine));
+  return {
+    ...item,
+    visibility: item.visibility ?? 'public',
+    mine,
+    sharedWithMe,
+    canEdit,
+    canManageState,
+  };
 }
 
 function getFieldValue(item: DemoPaste, field?: string): string {
@@ -423,6 +443,8 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
         mailerConfigured: true,
         defaultUserDeleteLimit: demoDefaultDeleteLimit,
         maxPastesPerUser: demoMaxPastesPerUser,
+        maxPublicPastesPerUser: demoMaxPublicPastesPerUser,
+        maxPrivatePastesPerUser: demoMaxPrivatePastesPerUser,
         maxStorageMbPerUser: demoMaxStorageMbPerUser,
         storage: computeDemoStorageStats(),
       });
@@ -448,6 +470,12 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     if (typeof body.maxPastesPerUser === 'number' && body.maxPastesPerUser >= 0) {
       demoMaxPastesPerUser = Math.floor(body.maxPastesPerUser);
     }
+    if (typeof body.maxPublicPastesPerUser === 'number' && body.maxPublicPastesPerUser >= 0) {
+      demoMaxPublicPastesPerUser = Math.floor(body.maxPublicPastesPerUser);
+    }
+    if (typeof body.maxPrivatePastesPerUser === 'number' && body.maxPrivatePastesPerUser >= 0) {
+      demoMaxPrivatePastesPerUser = Math.floor(body.maxPrivatePastesPerUser);
+    }
     if (typeof body.maxStorageMbPerUser === 'number' && body.maxStorageMbPerUser >= 0) {
       demoMaxStorageMbPerUser = Math.round(body.maxStorageMbPerUser * 100) / 100;
     }
@@ -457,6 +485,8 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       mailerConfigured: true,
       defaultUserDeleteLimit: demoDefaultDeleteLimit,
       maxPastesPerUser: demoMaxPastesPerUser,
+      maxPublicPastesPerUser: demoMaxPublicPastesPerUser,
+      maxPrivatePastesPerUser: demoMaxPrivatePastesPerUser,
       maxStorageMbPerUser: demoMaxStorageMbPerUser,
       storage: computeDemoStorageStats(),
     });
@@ -473,14 +503,20 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     const owned = Array.from(pastes.values()).filter((p) => p.owner === currentUser!.email);
     const rawBytes = owned.reduce((acc, p) => acc + new TextEncoder().encode(p.content).byteLength, 0);
     const storedBytes = owned.reduce((acc, p) => acc + estimateCompressedBytes(p.content), 0);
+    const privateCount = owned.filter((p) => p.visibility === 'private').length;
+    const unlimited = currentUser.role === 'admin';
     return jsonResponse({
       tokens: demoTokens,
       usage: {
         pasteCount: owned.length,
+        publicCount: owned.length - privateCount,
+        privateCount,
         rawBytes,
         storedBytes,
-        maxPastesPerUser: currentUser.role === 'admin' ? 0 : demoMaxPastesPerUser,
-        maxStorageMbPerUser: currentUser.role === 'admin' ? 0 : demoMaxStorageMbPerUser,
+        maxPastesPerUser: unlimited ? 0 : demoMaxPastesPerUser,
+        maxPublicPastesPerUser: unlimited ? 0 : demoMaxPublicPastesPerUser,
+        maxPrivatePastesPerUser: unlimited ? 0 : demoMaxPrivatePastesPerUser,
+        maxStorageMbPerUser: unlimited ? 0 : demoMaxStorageMbPerUser,
       },
     });
   }
@@ -531,20 +567,59 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       immutable: false,
       createdAt: new Date().toISOString(),
     });
-    return jsonResponse({ setupRequired: true, email, challenge: `demo-reg-${encodeURIComponent(email)}` }, 201);
+    currentUser = {
+      email,
+      role: 'user',
+      permanentDeleteLimit: demoDefaultDeleteLimit,
+    };
+    return jsonResponse({ authenticated: true, email, role: 'user' }, 201);
   }
 
   // Auth & Session
   if (path === '/api/auth' && method === 'GET') {
     if (!currentUser) {
-      return jsonResponse({ authenticated: false, email: null, role: null, permanentDeleteLimit: null });
+      return jsonResponse({
+        authenticated: false,
+        email: null,
+        role: null,
+        totpEnabled: false,
+        permanentDeleteLimit: null,
+      });
     }
+    const u = users.get(currentUser.email);
     return jsonResponse({
       authenticated: true,
       email: currentUser.email,
       role: currentUser.role,
+      totpEnabled: Boolean(u?.totpEnabled),
       permanentDeleteLimit: currentUser.permanentDeleteLimit,
     });
+  }
+
+  if (path === '/api/auth/totp/start' && method === 'POST') {
+    if (!currentUser) return jsonResponse({ message: 'Unauthorized' }, 401);
+    return jsonResponse({
+      secret: 'JBSWY3DPEHPK3PXP',
+      groupedSecret: 'JBSW Y3DP EHPK 3PXP',
+      otpauthUrl: `otpauth://totp/Cleanbin:${encodeURIComponent(currentUser.email)}?secret=JBSWY3DPEHPK3PXP&issuer=Cleanbin`,
+    });
+  }
+
+  if (path === '/api/auth/totp/enable' && method === 'POST') {
+    if (!currentUser) return jsonResponse({ message: 'Unauthorized' }, 401);
+    const u = users.get(currentUser.email);
+    if (u) u.totpEnabled = true;
+    return jsonResponse({ totpEnabled: true });
+  }
+
+  if (path === '/api/auth/totp' && method === 'DELETE') {
+    if (!currentUser) return jsonResponse({ message: 'Unauthorized' }, 401);
+    if (currentUser.role === 'admin') {
+      return jsonResponse({ message: 'Two-factor authentication is mandatory for administrators.' }, 403);
+    }
+    const u = users.get(currentUser.email);
+    if (u) u.totpEnabled = false;
+    return jsonResponse({ totpEnabled: false });
   }
 
   if (path === '/api/auth' && method === 'POST') {
@@ -623,6 +698,7 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     const content = typeof body.content === 'string' ? body.content : '';
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     const ttl = (typeof body.ttl === 'string' ? body.ttl : undefined) as PasteTtlOption | undefined;
+    const visibility: PasteVisibility = body.visibility === 'private' && currentUser ? 'private' : 'public';
     const wantsPerm =
       ttl === 'permanent' ||
       (ttl === undefined && body.permanent !== false && body.permanent !== 'false' && body.burnAfterRead !== true);
@@ -636,6 +712,20 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       if (demoMaxPastesPerUser > 0 && owned.length >= demoMaxPastesPerUser) {
         return jsonResponse(
           { message: `Paste limit reached (${demoMaxPastesPerUser} pastes max). Delete unused pastes first.` },
+          403
+        );
+      }
+      const privCount = owned.filter((p) => p.visibility === 'private').length;
+      const pubCount = owned.length - privCount;
+      if (visibility === 'private' && demoMaxPrivatePastesPerUser > 0 && privCount >= demoMaxPrivatePastesPerUser) {
+        return jsonResponse(
+          { message: `Private paste limit reached (${demoMaxPrivatePastesPerUser} max). Make one public or delete it first.` },
+          403
+        );
+      }
+      if (visibility === 'public' && demoMaxPublicPastesPerUser > 0 && pubCount >= demoMaxPublicPastesPerUser) {
+        return jsonResponse(
+          { message: `Public paste limit reached (${demoMaxPublicPastesPerUser} max). Make one private or delete it first.` },
           403
         );
       }
@@ -669,6 +759,7 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       name,
       content,
       permanent,
+      visibility,
       burnAfterRead,
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -678,7 +769,7 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       version: 1,
     };
     pastes.set(id, record);
-    return jsonResponse({ id, burnAfterRead }, 201);
+    return jsonResponse({ id, burnAfterRead, visibility }, 201);
   }
 
   if (path === '/api/pastes/presence' && method === 'GET') {
@@ -730,6 +821,15 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     if (!item) return jsonResponse({ message: 'Paste not found' }, 404);
 
     if (method === 'GET') {
+      const canAccessPrivate =
+        item.visibility !== 'private' ||
+        (currentUser &&
+          (currentUser.role === 'admin' ||
+            item.owner === currentUser.email ||
+            item.sharedWith.includes(currentUser.email)));
+      if (!canAccessPrivate) {
+        return jsonResponse({ message: 'Paste not found' }, 404);
+      }
       if (url.searchParams.get('touch') === '1') {
         if (item.burnAfterRead) {
           pastes.delete(id);
@@ -766,18 +866,39 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
         );
       }
       if (typeof body.name === 'string') {
-        const trimmed = body.name.trim();
-        if (item.permanent && !trimmed) {
-          return jsonResponse({ message: 'Name is required for permanent pastes' }, 400);
-        }
-        item.name = trimmed;
+        item.name = body.name.trim();
       }
       if (typeof body.content === 'string') {
         if (!body.content) return jsonResponse({ message: 'Invalid content' }, 400);
         item.content = body.content;
       }
+      if (body.visibility === 'public' || body.visibility === 'private') {
+        item.visibility = body.visibility;
+      }
+      if (typeof body.ttl === 'string') {
+        if (body.ttl === 'permanent') {
+          if (!item.name.trim()) return jsonResponse({ message: 'Name is required for permanent pastes' }, 400);
+          item.permanent = true;
+          item.burnAfterRead = false;
+          delete item.expiresAt;
+        } else {
+          item.permanent = false;
+          item.burnAfterRead = body.ttl === 'burn';
+          const ms =
+            body.ttl === '1h' ? 3_600_000 : body.ttl === '24h' ? 86_400_000 : body.ttl === '7d' || item.burnAfterRead ? 7 * 86_400_000 : 30 * 86_400_000;
+          item.expiresAt = new Date(Date.now() + ms).toISOString();
+        }
+      }
+      if (currentUser?.role === 'admin' && body.owner !== undefined) {
+        item.owner = typeof body.owner === 'string' && body.owner.trim() ? body.owner.trim().toLowerCase() : null;
+      }
+      if (item.permanent && !item.name.trim()) {
+        return jsonResponse({ message: 'Name is required for permanent pastes' }, 400);
+      }
       item.updatedAt = new Date().toISOString();
-      item.version += 1;
+      if (typeof body.name === 'string' || typeof body.content === 'string') {
+        item.version += 1;
+      }
       return jsonResponse({
         success: true,
         paste: {
@@ -786,6 +907,10 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
           content: item.content,
           owner: item.owner,
           sharedWith: item.sharedWith,
+          permanent: item.permanent,
+          visibility: item.visibility ?? 'public',
+          burnAfterRead: Boolean(item.burnAfterRead),
+          expiresAt: item.expiresAt ?? null,
           version: item.version,
           updatedAt: item.updatedAt,
         },

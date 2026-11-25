@@ -206,9 +206,9 @@ export default function UsersPage() {
         <div className="cb-section-head">
           <span className="cb-section-title">invite account</span>
           <span className="cb-section-sub">
-            Invitee sets password + mandatory 2FA via one-time link ·{' '}
+            Invitee sets password to join (2FA mandatory only for admins) ·{' '}
             <Link to="/dashboard/settings" style={{ color: '#64b5f6' }}>
-              registration & quotas →
+              registration &amp; quotas →
             </Link>
           </span>
         </div>

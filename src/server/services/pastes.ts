@@ -7,7 +7,7 @@ import {
   measureStoredBytes,
 } from '../db/compression.js';
 import { normalizeEmail } from '../../shared/validation.js';
-import type { PasteRecord, PasteTtlOption, StorageStats } from '../../shared/types.js';
+import type { PasteRecord, PasteTtlOption, PasteVisibility, StorageStats } from '../../shared/types.js';
 
 interface PasteRow {
   id: string;
@@ -18,6 +18,7 @@ interface PasteRow {
   sliding_ttl?: number | string;
   raw_bytes?: number | string;
   stored_bytes?: number | string;
+  is_private?: number | string;
   created_at: number | string;
   updated_at: number | string;
   expires_at: number | string | null;
@@ -31,6 +32,7 @@ export interface PasteMetadata {
   name: string;
   permanent: boolean;
   burnAfterRead: boolean;
+  visibility: PasteVisibility;
   rawBytes: number;
   storedBytes: number;
   createdAt: string;
@@ -43,6 +45,7 @@ export interface PasteMetadata {
 
 export interface CreatePasteOptions {
   ttl?: PasteTtlOption;
+  visibility?: PasteVisibility;
   burnAfterRead?: boolean;
   sharedWith?: string[];
 }
@@ -104,6 +107,7 @@ async function decodeRow(row: PasteRow): Promise<PasteRecord> {
     content: decoded.content,
     name: row.name || (typeof legacy.name === 'string' ? legacy.name : ''),
     permanent,
+    visibility: Number(row.is_private ?? 0) === 1 ? 'private' : 'public',
     burnAfterRead,
     slidingTtl,
     createdAt: new Date(createdAtMs).toISOString(),
@@ -157,6 +161,8 @@ export async function createPaste(
 
   const normalizedOwner = owner ? normalizeEmail(owner) : null;
   const shared = (opts.sharedWith ?? []).map((e) => normalizeEmail(e)).filter(Boolean);
+  // Private visibility only makes sense for pastes owned by an account.
+  const isPrivate = Boolean(normalizedOwner) && opts.visibility === 'private';
 
   const db = await getDb();
   const compact = await compressContentCompact(content, db.dialect);
@@ -164,8 +170,8 @@ export async function createPaste(
   await db.execute(
     `INSERT INTO pastes (
       id, name, payload, permanent, burn_after_read, sliding_ttl,
-      raw_bytes, stored_bytes, created_at, updated_at, expires_at, owner, shared_with, version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      raw_bytes, stored_bytes, created_at, updated_at, expires_at, owner, shared_with, is_private, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [
       id,
       name,
@@ -180,6 +186,7 @@ export async function createPaste(
       expiresAtMs,
       normalizedOwner,
       JSON.stringify(shared),
+      isPrivate ? 1 : 0,
     ]
   );
 
@@ -188,6 +195,7 @@ export async function createPaste(
     content,
     name,
     permanent,
+    visibility: isPrivate ? 'private' : 'public',
     burnAfterRead,
     slidingTtl,
     createdAt: nowIso,
@@ -268,7 +276,7 @@ export async function getPaste(
 export async function getPasteMetadata(id: string): Promise<PasteMetadata | null> {
   const db = await getDb();
   const row = await db.queryOne<Omit<PasteRow, 'payload'>>(
-    `SELECT id, name, permanent, burn_after_read, raw_bytes, stored_bytes,
+    `SELECT id, name, permanent, burn_after_read, raw_bytes, stored_bytes, is_private,
             created_at, updated_at, expires_at, owner, shared_with, version
      FROM pastes WHERE id = ?`,
     [id]
@@ -289,6 +297,7 @@ export async function getPasteMetadata(id: string): Promise<PasteMetadata | null
     name: row.name,
     permanent,
     burnAfterRead,
+    visibility: Number(row.is_private ?? 0) === 1 ? 'private' : 'public',
     rawBytes: Number(row.raw_bytes ?? 0),
     storedBytes: Number(row.stored_bytes ?? 0),
     createdAt: new Date(createdMs).toISOString(),
@@ -570,4 +579,118 @@ export async function compactAllPastes(adapter?: SqlAdapter): Promise<StorageSta
 
   await db.vacuum?.();
   return getStorageStats(db);
+}
+
+export async function getUserVisibilityCounts(
+  email: string
+): Promise<{ publicCount: number; privateCount: number }> {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return { publicCount: 0, privateCount: 0 };
+  const db = await getDb();
+  const nowMs = Date.now();
+  const row = await db.queryOne<{ private_count: number | string; total: number | string }>(
+    `SELECT COALESCE(SUM(CASE WHEN is_private = 1 THEN 1 ELSE 0 END), 0) AS private_count,
+            COUNT(*) AS total
+     FROM pastes
+     WHERE owner = ? AND (permanent = 1 OR expires_at IS NULL OR expires_at > ?)`,
+    [normalized, nowMs]
+  );
+  const total = Number(row?.total ?? 0);
+  const privateCount = Number(row?.private_count ?? 0);
+  return { publicCount: Math.max(0, total - privateCount), privateCount };
+}
+
+export interface PasteStatePatch {
+  visibility?: PasteVisibility;
+  ttl?: PasteTtlOption;
+  owner?: string | null;
+}
+
+export type PasteStateResult =
+  | { status: 'ok'; paste: PasteRecord }
+  | { status: 'not_found' }
+  | { status: 'invalid'; message: string };
+
+// Changes the lifecycle state of an EXISTING paste without touching its stored payload:
+// public <-> private, any TTL / burn-after-read <-> permanent, and (admin) owner reassignment.
+export async function updatePasteState(id: string, patch: PasteStatePatch): Promise<PasteStateResult> {
+  const db = await getDb();
+  return db.transaction(async (tx): Promise<PasteStateResult> => {
+    const row = await tx.queryOne<PasteRow>('SELECT * FROM pastes WHERE id = ?', [id]);
+    if (!row) return { status: 'not_found' };
+    if (isRowExpired(row)) {
+      await tx.execute('DELETE FROM pastes WHERE id = ?', [id]);
+      return { status: 'not_found' };
+    }
+
+    const current = await decodeRow(row);
+    const nowMs = Date.now();
+
+    let owner = current.owner;
+    if (patch.owner !== undefined) owner = patch.owner ? normalizeEmail(patch.owner) : null;
+
+    let isPrivate = current.visibility === 'private';
+    if (patch.visibility) isPrivate = patch.visibility === 'private';
+    if (isPrivate && !owner) {
+      return { status: 'invalid', message: 'Private pastes must belong to an account.' };
+    }
+
+    let permanent = current.permanent;
+    let burn = Boolean(current.burnAfterRead);
+    let sliding = current.slidingTtl !== false;
+    let expiresAtMs: number | null = current.expiresAt ? Date.parse(current.expiresAt) : null;
+
+    if (patch.ttl) {
+      if (patch.ttl === 'permanent') {
+        if (!owner) {
+          return { status: 'invalid', message: 'Only pastes owned by an account can be permanent.' };
+        }
+        if (!current.name.trim()) {
+          return { status: 'invalid', message: 'Name is required for permanent pastes.' };
+        }
+        permanent = true;
+        burn = false;
+        sliding = false;
+        expiresAtMs = null;
+      } else {
+        permanent = false;
+        burn = patch.ttl === 'burn';
+        if (patch.ttl === '1h' || patch.ttl === '24h' || patch.ttl === '7d') {
+          expiresAtMs = nowMs + TTL_MS_BY_OPTION[patch.ttl];
+          sliding = false;
+        } else if (burn) {
+          expiresAtMs = nowMs + TTL_MS_BY_OPTION['7d'];
+          sliding = false;
+        } else {
+          expiresAtMs = computeDefaultExpiryMs(nowMs);
+          sliding = true;
+        }
+      }
+    }
+
+    if (permanent && !owner) {
+      return { status: 'invalid', message: 'Permanent pastes must belong to an account.' };
+    }
+
+    await tx.execute(
+      `UPDATE pastes
+       SET permanent = ?, burn_after_read = ?, sliding_ttl = ?, expires_at = ?, owner = ?, is_private = ?, updated_at = ?
+       WHERE id = ?`,
+      [permanent ? 1 : 0, burn ? 1 : 0, sliding ? 1 : 0, expiresAtMs, owner, isPrivate ? 1 : 0, nowMs, id]
+    );
+
+    return {
+      status: 'ok',
+      paste: {
+        ...current,
+        permanent,
+        burnAfterRead: burn,
+        slidingTtl: sliding,
+        visibility: isPrivate ? 'private' : 'public',
+        owner,
+        expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : null,
+        updatedAt: new Date(nowMs).toISOString(),
+      },
+    };
+  });
 }

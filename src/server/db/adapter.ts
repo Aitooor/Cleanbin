@@ -173,10 +173,19 @@ export function createSqliteAdapter(sqlitePath: string): SqlAdapter {
       }
     },
     async reclaimPages(): Promise<void> {
+      let release!: () => void;
+      const previous = txLock;
+      txLock = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
       try {
-        driver.exec('PRAGMA incremental_vacuum(64);');
+        driver.exec('PRAGMA incremental_vacuum;');
+        driver.exec('PRAGMA wal_checkpoint(TRUNCATE);');
       } catch {
-        // Best-effort incremental page reclamation
+        // Best-effort incremental page reclamation + WAL truncation
+      } finally {
+        release();
       }
     },
     async fileSizeBytes(): Promise<number> {

@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { startRegistration } from '@simplewebauthn/browser';
 import { FiClipboard } from 'react-icons/fi';
+import { renderSVG } from 'uqr';
 import { Button, ConfirmModal, IconButton, type ConfirmRequest } from '../../components/CleanUi';
 import { useNotification } from '../../components/NotificationProvider';
 import { useSession } from '../../hooks/useSession';
@@ -10,12 +11,15 @@ import type { ApiTokenInfo, DashboardSessionInfo, UserQuotaUsage } from '../../.
 
 export default function AccountPage() {
   const navigate = useNavigate();
-  const { email, role, permanentDeleteLimit, signOut } = useSession();
+  const { email, role, totpEnabled, permanentDeleteLimit, refreshSession, signOut } = useSession();
   const { addNotification } = useNotification();
   const isAdmin = role === 'admin';
 
   const [passkeyRegistered, setPasskeyRegistered] = useState<boolean | null>(null);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [totpSetup, setTotpSetup] = useState<{ groupedSecret: string; otpauthUrl: string } | null>(null);
+  const [totpCode, setTotpCode] = useState('');
+  const [totpBusy, setTotpBusy] = useState(false);
   const [sessions, setSessions] = useState<DashboardSessionInfo[] | null>(null);
   const [tokens, setTokens] = useState<ApiTokenInfo[] | null>(null);
   const [usage, setUsage] = useState<UserQuotaUsage | null>(null);
@@ -195,6 +199,79 @@ export default function AccountPage() {
     );
   };
 
+  const totpQrSvg = useMemo(() => {
+    if (!totpSetup?.otpauthUrl) return '';
+    try {
+      return renderSVG(totpSetup.otpauthUrl, {
+        whiteColor: '#e8e8e8',
+        blackColor: '#141414',
+        border: 2,
+      }).replace('<svg ', '<svg width="144" height="144" style="display:block;border-radius:3px;" ');
+    } catch {
+      return '';
+    }
+  }, [totpSetup]);
+
+  const startEnableTotp = async () => {
+    if (totpBusy) return;
+    setTotpBusy(true);
+    try {
+      const res = await fetch('/api/auth/totp/start', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.otpauthUrl) {
+        setTotpSetup({ groupedSecret: data.groupedSecret, otpauthUrl: data.otpauthUrl });
+        setTotpCode('');
+      } else {
+        addNotification(data.message || 'Could not start 2FA setup.');
+      }
+    } finally {
+      setTotpBusy(false);
+    }
+  };
+
+  const confirmEnableTotp = async () => {
+    if (totpBusy || !/^\d{6}$/.test(totpCode.trim())) {
+      addNotification('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+    setTotpBusy(true);
+    try {
+      const res = await fetch('/api/auth/totp/enable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: totpCode.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setTotpSetup(null);
+        setTotpCode('');
+        await refreshSession();
+        addNotification('Two-factor authentication enabled.');
+      } else {
+        addNotification(data.message || 'Invalid verification code.');
+      }
+    } finally {
+      setTotpBusy(false);
+    }
+  };
+
+  const handleDisableTotp = async () => {
+    if (totpBusy || isAdmin) return;
+    setTotpBusy(true);
+    try {
+      const res = await fetch('/api/auth/totp', { method: 'DELETE' });
+      if (res.ok) {
+        await refreshSession();
+        addNotification('Two-factor authentication disabled.');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        addNotification(data.message || 'Could not disable 2FA.');
+      }
+    } finally {
+      setTotpBusy(false);
+    }
+  };
+
   const cliCurlSnippet = freshToken
     ? `cat file.txt | curl -fsS -H "Authorization: Bearer ${freshToken}" -H "X-TTL: permanent" -H "X-Name: My Snippet" --data-binary @- ${originUrl}/raw`
     : `cat file.txt | curl -fsS --data-binary @- ${originUrl}/raw`;
@@ -212,15 +289,26 @@ export default function AccountPage() {
           <span className={`cb-tag ${isAdmin ? 'cb-tag--accent' : ''}`}>{role}</span>
         </div>
         {usage && (
-          <div className="cb-kv-row">
-            <span className="cb-label">disk usage</span>
-            <span>
-              {usage.pasteCount}
-              {usage.maxPastesPerUser > 0 ? ` / ${usage.maxPastesPerUser}` : ''} pastes ·{' '}
-              {formatBytes(usage.storedBytes)}
-              {usage.maxStorageMbPerUser > 0 ? ` / ${usage.maxStorageMbPerUser} MB` : ' (unlimited)'} on disk
-            </span>
-          </div>
+          <>
+            <div className="cb-kv-row">
+              <span className="cb-label">pastes & visibility</span>
+              <span>
+                {usage.pasteCount}
+                {usage.maxPastesPerUser > 0 ? ` / ${usage.maxPastesPerUser}` : ''} total ·{' '}
+                {usage.publicCount}
+                {usage.maxPublicPastesPerUser ? ` / ${usage.maxPublicPastesPerUser}` : ''} public ·{' '}
+                {usage.privateCount}
+                {usage.maxPrivatePastesPerUser ? ` / ${usage.maxPrivatePastesPerUser}` : ''} private
+              </span>
+            </div>
+            <div className="cb-kv-row">
+              <span className="cb-label">disk usage</span>
+              <span>
+                {formatBytes(usage.storedBytes)}
+                {usage.maxStorageMbPerUser > 0 ? ` / ${usage.maxStorageMbPerUser} MB` : ' (unlimited)'} on disk
+              </span>
+            </div>
+          </>
         )}
         {!isAdmin && permanentDeleteLimit !== null && (
           <div className="cb-kv-row">
@@ -375,13 +463,66 @@ export default function AccountPage() {
             <div className="cb-section-sub">
               {passkeyRegistered
                 ? 'Superseded by passkey.'
-                : 'Mandatory on password sign-in.'}
+                : totpEnabled
+                  ? isAdmin
+                    ? 'Active · mandatory for administrator accounts.'
+                    : 'Active on password sign-in.'
+                  : isAdmin
+                    ? 'Mandatory for administrator accounts.'
+                    : 'Off · optional for standard user accounts.'}
             </div>
           </div>
-          <span className={`cb-tag ${passkeyRegistered ? '' : 'cb-tag--perm'}`}>
-            {passkeyRegistered ? 'off' : 'enabled'}
-          </span>
+          {!passkeyRegistered && !isAdmin ? (
+            totpEnabled ? (
+              <Button size="sm" variant="danger" disabled={totpBusy} onClick={() => void handleDisableTotp()}>
+                disable 2fa
+              </Button>
+            ) : (
+              <Button size="sm" disabled={totpBusy} onClick={() => void startEnableTotp()}>
+                enable 2fa
+              </Button>
+            )
+          ) : (
+            <span className={`cb-tag ${!passkeyRegistered && totpEnabled ? 'cb-tag--perm' : ''}`}>
+              {passkeyRegistered ? 'off' : totpEnabled ? 'enabled' : 'off'}
+            </span>
+          )}
         </div>
+
+        {totpSetup && !totpEnabled && !passkeyRegistered && (
+          <div className="cb-notice" style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            {totpQrSvg && (
+              <div
+                aria-label="Authenticator QR code"
+                style={{ width: 144, height: 144, lineHeight: 0, flexShrink: 0 }}
+                dangerouslySetInnerHTML={{ __html: totpQrSvg }}
+              />
+            )}
+            <div style={{ flex: '1 1 210px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="cb-section-sub">
+                Scan QR or enter secret: <code style={{ color: '#e0e0e0' }}>{totpSetup.groupedSecret}</code>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="123456"
+                  className="cb-input"
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
+                  style={{ width: 110, textAlign: 'center', letterSpacing: 2 }}
+                />
+                <Button variant="primary" size="sm" disabled={totpBusy} onClick={() => void confirmEnableTotp()}>
+                  activate
+                </Button>
+                <Button size="sm" onClick={() => setTotpSetup(null)}>
+                  cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="cb-panel">

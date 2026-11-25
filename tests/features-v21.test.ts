@@ -7,7 +7,6 @@ import { getDb, resetDbForTests } from '../src/server/db/index.js';
 import { resetRateLimitsForTests } from '../src/server/middleware/rateLimit.js';
 import { createSessionToken } from '../src/server/services/auth.js';
 import { createUserSession } from '../src/server/services/sessions.js';
-import { generateTotp } from '../src/server/services/totp.js';
 import { decryptPastePayload, encryptPastePayload, isEncryptedPasteContent } from '../src/client/utils/e2ee.js';
 import { buildPasteTarget, parsePasteFragment } from '../src/client/utils/urlHash.js';
 
@@ -135,7 +134,7 @@ describe('Cleanbin v2.1 — E2EE, Selectable TTL, Burn-After-Read, /raw/:id & Re
     });
     expect(patchSettings.status).toBe(200);
 
-    // Public self-registration now succeeds and enforces mandatory 2FA TOTP setup
+    // Public self-registration logs standard users in directly WITHOUT forcing 2FA setup
     const openReg = await app.request('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -143,31 +142,25 @@ describe('Cleanbin v2.1 — E2EE, Selectable TTL, Burn-After-Read, /raw/:id & Re
     });
     expect(openReg.status).toBe(201);
     const regBody = await openReg.json();
-    expect(regBody.setupRequired).toBe(true);
-    expect(typeof regBody.challenge).toBe('string');
+    expect(regBody.authenticated).toBe(true);
+    expect(regBody.setupRequired).toBeUndefined();
 
-    // Complete mandatory 2FA setup using the returned challenge
-    const startSetup = await (
-      await app.request('/api/setup/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ challenge: regBody.challenge }),
-      })
-    ).json();
-    const code = generateTotp(startSetup.secret);
-    const completeSetup = await app.request('/api/setup/complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ challenge: regBody.challenge, code }),
-    });
-    expect(completeSetup.status).toBe(200);
-
-    const setCookie = completeSetup.headers.get('set-cookie')!;
+    const setCookie = openReg.headers.get('set-cookie')!;
     const userCookie = setCookie.match(/auth-token=[^;]+/)![0];
     const whoami = await (await app.request('/api/auth', { headers: { Cookie: userCookie } })).json();
     expect(whoami.authenticated).toBe(true);
     expect(whoami.email).toBe('self@example.com');
     expect(whoami.role).toBe('user');
+    expect(whoami.totpEnabled).toBe(false);
     expect(whoami.permanentDeleteLimit).toBe(4);
+
+    // Password re-login for that user succeeds directly without TOTP challenge
+    const relogin = await app.request('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'self@example.com', password: 'ValidPassword123!' }),
+    });
+    expect(relogin.status).toBe(200);
+    expect((await relogin.json()).authenticated).toBe(true);
   });
 });

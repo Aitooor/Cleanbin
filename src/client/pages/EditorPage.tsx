@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { FiFilePlus, FiLock, FiLogIn, FiSave, FiSliders, FiUnlock } from 'react-icons/fi';
+import { FiEye, FiEyeOff, FiFilePlus, FiLock, FiLogIn, FiSave, FiSliders, FiUnlock } from 'react-icons/fi';
 import { useNotification } from '../components/NotificationProvider';
 import { useSession } from '../hooks/useSession';
 import { postBroadcast } from '../utils/broadcast';
 import { encryptPastePayload } from '../utils/e2ee';
 import { buildPasteTarget } from '../utils/urlHash';
-import type { PasteTtlOption } from '../../shared/types';
+import type { PasteTtlOption, PasteVisibility } from '../../shared/types';
 
 // Exact square icon button geometry & colors from the original Next.js Editor.tsx
 const iconButtonStyle: React.CSSProperties = {
@@ -38,18 +38,23 @@ export default function EditorPage({ cloneMode = false }: { cloneMode?: boolean 
   const [content, setContent] = useState('');
   const [name, setName] = useState('');
   const [ttl, setTtl] = useState<PasteTtlOption>('30d');
+  const [visibility, setVisibility] = useState<PasteVisibility>('public');
   const [isEncrypted, setIsEncrypted] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const isPermanent = isLoggedIn && ttl === 'permanent';
+  const isPrivate = isLoggedIn && visibility === 'private';
   const isBurn = ttl === 'burn';
 
-  // Reset `permanent` back to `30d` if the user signs out
+  // Reset `permanent` and `private` back to anonymous defaults if the user signs out
   useEffect(() => {
     if (!isLoggedIn && ttl === 'permanent') {
       setTtl('30d');
     }
-  }, [isLoggedIn, ttl]);
+    if (!isLoggedIn && visibility === 'private') {
+      setVisibility('public');
+    }
+  }, [isLoggedIn, ttl, visibility]);
 
   useEffect(() => {
     if (!cloneMode) return;
@@ -118,6 +123,7 @@ export default function EditorPage({ cloneMode = false }: { cloneMode?: boolean 
           permanent: isPermanent,
           ttl,
           burnAfterRead: isBurn,
+          visibility: isPrivate ? 'private' : 'public',
         }),
       });
 
@@ -164,7 +170,7 @@ export default function EditorPage({ cloneMode = false }: { cloneMode?: boolean 
     } finally {
       setSaving(false);
     }
-  }, [saving, isPermanent, isBurn, isEncrypted, name, content, ttl, addNotification, navigate]);
+  }, [saving, isPermanent, isPrivate, isBurn, isEncrypted, name, content, ttl, addNotification, navigate]);
 
   // Global Ctrl+S / Cmd+S shortcut
   useEffect(() => {
@@ -365,6 +371,35 @@ export default function EditorPage({ cloneMode = false }: { cloneMode?: boolean 
               >
                 {isEncrypted ? <FiLock size={18} /> : <FiUnlock size={18} />}
               </button>
+
+              {isLoggedIn && (
+                <button
+                  type="button"
+                  onClick={() => setVisibility((v) => (v === 'private' ? 'public' : 'private'))}
+                  style={{
+                    ...iconButtonStyle,
+                    backgroundColor: isPrivate ? '#2b2418' : '#1e1e1e',
+                    color: isPrivate ? '#ffb74d' : '#888',
+                    borderColor: isPrivate ? '#5c4520' : '#333',
+                    padding: '0 10px',
+                    height: 42,
+                    gap: 5,
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    fontWeight: 600,
+                  }}
+                  title={
+                    isPrivate
+                      ? 'Private: visible only to you, collaborators, and admins (click for Public)'
+                      : 'Public: anyone with the link can view (click for Private)'
+                  }
+                  aria-label="Toggle paste visibility"
+                  aria-pressed={isPrivate}
+                >
+                  {isPrivate ? <FiEyeOff size={15} /> : <FiEye size={15} />}
+                  <span>{isPrivate ? 'Priv' : 'Pub'}</span>
+                </button>
+              )}
 
               <select
                 aria-label="Paste expiration"

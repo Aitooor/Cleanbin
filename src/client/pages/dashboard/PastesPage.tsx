@@ -27,6 +27,8 @@ import type {
   PasteScope,
   PasteSortDir,
   PasteSortField,
+  PasteTtlOption,
+  PasteVisibility,
 } from '../../../shared/types';
 
 type SortValue = 'default' | 'createdAt:asc' | 'name:asc' | 'name:desc';
@@ -42,6 +44,14 @@ type EditState = {
   id: string;
   name: string;
   content: string;
+  visibility: PasteVisibility;
+  initialVisibility: PasteVisibility;
+  ttlChoice: '' | PasteTtlOption;
+  currentPermanent: boolean;
+  currentBurn: boolean;
+  owner: string;
+  initialOwner: string;
+  canManageState: boolean;
   version: number;
   updatedAt?: string;
   saving: boolean;
@@ -210,10 +220,20 @@ export default function PastesPage() {
   };
 
   const openEdit = (paste: ListedPaste) => {
+    const initVis: PasteVisibility = paste.visibility === 'private' ? 'private' : 'public';
+    const initOwner = paste.owner ?? '';
     setEditing({
       id: paste.id,
       name: paste.name || '',
       content: paste.content || '',
+      visibility: initVis,
+      initialVisibility: initVis,
+      ttlChoice: '',
+      currentPermanent: Boolean(paste.permanent),
+      currentBurn: Boolean(paste.burnAfterRead),
+      owner: initOwner,
+      initialOwner: initOwner,
+      canManageState: Boolean(paste.canManageState || isAdmin || paste.mine),
       version: typeof paste.version === 'number' ? paste.version : 0,
       updatedAt: paste.updatedAt,
       saving: false,
@@ -230,6 +250,13 @@ export default function PastesPage() {
                 ...prev,
                 name: body.name ?? prev.name,
                 content: body.content ?? prev.content,
+                visibility: body.visibility === 'private' ? 'private' : 'public',
+                initialVisibility: body.visibility === 'private' ? 'private' : 'public',
+                currentPermanent: Boolean(body.permanent),
+                currentBurn: Boolean(body.burnAfterRead),
+                owner: typeof body.owner === 'string' ? body.owner : prev.owner,
+                initialOwner: typeof body.owner === 'string' ? body.owner : prev.initialOwner,
+                canManageState: Boolean(body.canManageState ?? prev.canManageState),
                 version: body.version ?? prev.version,
                 updatedAt: body.updatedAt ?? prev.updatedAt,
               }
@@ -242,14 +269,27 @@ export default function PastesPage() {
   const saveEdit = async (overrideVersion?: number) => {
     if (!editing) return;
     setEditing((prev) => (prev ? { ...prev, saving: true, error: null } : prev));
+    const patchPayload: Record<string, unknown> = {
+      name: editing.name,
+      content: editing.content,
+      version: overrideVersion ?? editing.version,
+    };
+    if (editing.canManageState) {
+      if (editing.visibility !== editing.initialVisibility) {
+        patchPayload.visibility = editing.visibility;
+      }
+      if (editing.ttlChoice) {
+        patchPayload.ttl = editing.ttlChoice;
+      }
+      if (isAdmin && editing.owner.trim() !== editing.initialOwner.trim()) {
+        patchPayload.owner = editing.owner.trim() || null;
+      }
+    }
+
     const response = await fetch(`/api/paste/${editing.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: editing.name,
-        content: editing.content,
-        version: overrideVersion ?? editing.version,
-      }),
+      body: JSON.stringify(patchPayload),
     });
 
     if (response.status === 409) {
@@ -274,7 +314,7 @@ export default function PastesPage() {
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       setEditing((prev) =>
-        prev ? { ...prev, saving: false, error: body?.message || 'Failed to save paste.' } : prev
+        prev ? { ...prev, saving: false, error: body?.message || body?.error || 'Failed to save paste.' } : prev
       );
       return;
     }
@@ -285,6 +325,10 @@ export default function PastesPage() {
       updatePaste(editing.id, {
         name: saved.name,
         content: saved.content,
+        permanent: Boolean(saved.permanent),
+        visibility: saved.visibility === 'private' ? 'private' : 'public',
+        burnAfterRead: Boolean(saved.burnAfterRead),
+        expiresAt: saved.expiresAt ?? null,
         version: saved.version,
         updatedAt: saved.updatedAt,
         owner: saved.owner,
@@ -531,6 +575,11 @@ export default function PastesPage() {
                     >
                       {row.permanent ? 'perm' : row.burnAfterRead ? '1 read' : 'temp'}
                     </span>
+                    {row.visibility === 'private' && (
+                      <span className="cb-tag cb-tag--warn" style={{ marginLeft: 6 }}>
+                        priv
+                      </span>
+                    )}
                   </td>
                   <td style={{ color: '#666', whiteSpace: 'nowrap' }}>{formatDateTime(row.createdAt)}</td>
                   <td className="cb-right">
@@ -700,6 +749,73 @@ export default function PastesPage() {
               onChange={(e) => setEditing((p) => (p ? { ...p, name: e.target.value } : p))}
             />
           </label>
+
+          {editing.canManageState && (
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <label className="cb-field" style={{ flex: '1 1 130px' }}>
+                <span className="cb-label">visibility</span>
+                <select
+                  className="cb-select"
+                  value={editing.visibility}
+                  onChange={(e) =>
+                    setEditing((p) =>
+                      p ? { ...p, visibility: e.target.value as PasteVisibility } : p
+                    )
+                  }
+                >
+                  <option value="public">public</option>
+                  <option value="private">private</option>
+                </select>
+              </label>
+
+              <label className="cb-field" style={{ flex: '1 1 170px' }}>
+                <span className="cb-label">lifecycle / expiration</span>
+                <select
+                  className="cb-select"
+                  value={editing.ttlChoice}
+                  onChange={(e) =>
+                    setEditing((p) =>
+                      p ? { ...p, ttlChoice: e.target.value as '' | PasteTtlOption } : p
+                    )
+                  }
+                >
+                  <option value="">
+                    keep current (
+                    {editing.currentPermanent
+                      ? 'permanent'
+                      : editing.currentBurn
+                        ? '1 read'
+                        : 'temporary'}
+                    )
+                  </option>
+                  <option value="permanent">permanent</option>
+                  <option value="30d">30 days</option>
+                  <option value="7d">7 days</option>
+                  <option value="24h">24 hours</option>
+                  <option value="1h">1 hour</option>
+                  <option value="burn">1 read (burn)</option>
+                </select>
+              </label>
+
+              {isAdmin && (
+                <label className="cb-field" style={{ flex: '1 1 200px' }}>
+                  <span className="cb-label">owner (blank = anonymous)</span>
+                  <input
+                    className="cb-input"
+                    list="cleanbin-edit-owners-list"
+                    placeholder="owner@example.com"
+                    value={editing.owner}
+                    onChange={(e) => setEditing((p) => (p ? { ...p, owner: e.target.value } : p))}
+                  />
+                  <datalist id="cleanbin-edit-owners-list">
+                    {users.map((u) => (
+                      <option key={u.email} value={u.email} />
+                    ))}
+                  </datalist>
+                </label>
+              )}
+            </div>
+          )}
 
           <label className="cb-field">
             <span className="cb-label">content</span>

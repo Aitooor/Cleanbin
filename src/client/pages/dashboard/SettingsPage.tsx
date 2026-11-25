@@ -19,6 +19,8 @@ export default function SettingsPage() {
   const [mailerConfigured, setMailerConfigured] = useState(false);
   const [defaultCapInput, setDefaultCapInput] = useState('2');
   const [maxPastesInput, setMaxPastesInput] = useState('100');
+  const [maxPublicInput, setMaxPublicInput] = useState('0');
+  const [maxPrivateInput, setMaxPrivateInput] = useState('25');
   const [maxStorageMbInput, setMaxStorageMbInput] = useState('10');
   const [storage, setStorage] = useState<StorageStats | null>(null);
 
@@ -37,6 +39,12 @@ export default function SettingsPage() {
     }
     if (typeof data.maxPastesPerUser === 'number') {
       setMaxPastesInput(String(data.maxPastesPerUser));
+    }
+    if (typeof data.maxPublicPastesPerUser === 'number') {
+      setMaxPublicInput(String(data.maxPublicPastesPerUser));
+    }
+    if (typeof data.maxPrivatePastesPerUser === 'number') {
+      setMaxPrivateInput(String(data.maxPrivatePastesPerUser));
     }
     if (typeof data.maxStorageMbPerUser === 'number') {
       setMaxStorageMbInput(String(data.maxStorageMbPerUser));
@@ -75,6 +83,8 @@ export default function SettingsPage() {
 
     const cap = Number(defaultCapInput);
     const maxPastes = Number(maxPastesInput);
+    const maxPublic = Number(maxPublicInput);
+    const maxPrivate = Number(maxPrivateInput);
     const maxStorageMb = Number(maxStorageMbInput);
 
     if (!Number.isInteger(cap) || cap < 0) {
@@ -83,6 +93,10 @@ export default function SettingsPage() {
     }
     if (!Number.isInteger(maxPastes) || maxPastes < 0) {
       addNotification('Max pastes per user must be an integer >= 0 (0 = unlimited).');
+      return;
+    }
+    if (!Number.isInteger(maxPublic) || maxPublic < 0 || !Number.isInteger(maxPrivate) || maxPrivate < 0) {
+      addNotification('Public/private limits must be integers >= 0 (0 = unlimited).');
       return;
     }
     if (!Number.isFinite(maxStorageMb) || maxStorageMb < 0) {
@@ -100,6 +114,8 @@ export default function SettingsPage() {
           requireEmailVerification,
           defaultUserDeleteLimit: cap,
           maxPastesPerUser: maxPastes,
+          maxPublicPastesPerUser: maxPublic,
+          maxPrivatePastesPerUser: maxPrivate,
           maxStorageMbPerUser: maxStorageMb,
           ...override,
         }),
@@ -146,7 +162,7 @@ export default function SettingsPage() {
           <span className="cb-section-title">registration & anti-spam</span>
           <span className="cb-section-sub">
             {regMode === 'open'
-              ? 'Public registration active on /login · mandatory 2FA on first sign-in.'
+              ? 'Public registration active on /login (2FA mandatory only for admins).'
               : 'Invite-only · only administrators can invite accounts.'}
           </span>
         </div>
@@ -229,8 +245,8 @@ export default function SettingsPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <label className="cb-field" style={{ flex: '1 1 170px' }}>
-            <span className="cb-label">max pastes per user</span>
+          <label className="cb-field" style={{ flex: '1 1 150px' }}>
+            <span className="cb-label">max total pastes</span>
             <input
               type="number"
               min={0}
@@ -240,8 +256,30 @@ export default function SettingsPage() {
             />
           </label>
 
-          <label className="cb-field" style={{ flex: '1 1 190px' }}>
-            <span className="cb-label">max disk per user (MB compressed)</span>
+          <label className="cb-field" style={{ flex: '1 1 150px' }}>
+            <span className="cb-label">max public pastes</span>
+            <input
+              type="number"
+              min={0}
+              className="cb-input"
+              value={maxPublicInput}
+              onChange={(e) => setMaxPublicInput(e.target.value)}
+            />
+          </label>
+
+          <label className="cb-field" style={{ flex: '1 1 150px' }}>
+            <span className="cb-label">max private pastes</span>
+            <input
+              type="number"
+              min={0}
+              className="cb-input"
+              value={maxPrivateInput}
+              onChange={(e) => setMaxPrivateInput(e.target.value)}
+            />
+          </label>
+
+          <label className="cb-field" style={{ flex: '1 1 170px' }}>
+            <span className="cb-label">max disk (MB compressed)</span>
             <input
               type="number"
               min={0}
@@ -252,7 +290,7 @@ export default function SettingsPage() {
             />
           </label>
 
-          <label className="cb-field" style={{ flex: '1 1 170px' }}>
+          <label className="cb-field" style={{ flex: '1 1 150px' }}>
             <span className="cb-label">default perm delete cap</span>
             <input
               type="number"

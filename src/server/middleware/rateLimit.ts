@@ -43,6 +43,9 @@ export function rateLimit(options: RateLimitOptions): MiddlewareHandler {
       const oldest = bucket.timestamps[0] ?? now;
       const retryAfterSec = Math.max(1, Math.ceil((oldest + options.windowMs - now) / 1000));
       c.header('Retry-After', String(retryAfterSec));
+      if (c.req.path === '/raw' || c.req.path.startsWith('/raw/')) {
+        return c.text('Too many requests. Please try again shortly.\n', 429);
+      }
       return c.json(
         {
           error: 'Too many requests. Please try again shortly.',

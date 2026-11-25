@@ -784,6 +784,15 @@
   padding-left: 1.6em;
 }
 
+.cb-md input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+  accent-color: #1e88e5;
+}
+
 .cb-md a {
   color: #64b5f6;
   text-decoration: none;

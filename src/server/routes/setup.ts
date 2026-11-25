@@ -10,7 +10,9 @@ import {
 import { createUserSession } from '../services/sessions.js';
 import { buildOtpAuthUrl, groupSecret } from '../services/totp.js';
 import {
+  activateUserWithoutTotp,
   enableTotp,
+  getAccountState,
   hasStoredPassword,
   resolveInviteEmail,
   SETUP_PASSWORD_MIN_LENGTH,
@@ -64,9 +66,15 @@ setupRoutes.post('/api/setup/start', setupLimiter, async (c) => {
       return c.json({ message: 'A token or challenge is required' }, 400);
     }
 
-    const secret = await startTotpSetup(email);
+    const [secret, account] = await Promise.all([
+      startTotpSetup(email),
+      getAccountState(email),
+    ]);
+    const role = account?.role ?? 'user';
     return c.json({
       email,
+      role,
+      totpOptional: role !== 'admin',
       secret,
       groupedSecret: groupSecret(secret),
       otpauthUrl: buildOtpAuthUrl(email, secret),
@@ -84,9 +92,9 @@ setupRoutes.post('/api/setup/start', setupLimiter, async (c) => {
 
 setupRoutes.post('/api/setup/complete', setupLimiter, async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const { token, challenge, code } = (body ?? {}) as Record<string, unknown>;
+  const { token, challenge, code, skipTotp } = (body ?? {}) as Record<string, unknown>;
 
-  if (typeof code !== 'string') {
+  if (skipTotp !== true && typeof code !== 'string') {
     return c.json({ message: 'A verification code is required' }, 400);
   }
 
@@ -109,10 +117,25 @@ setupRoutes.post('/api/setup/complete', setupLimiter, async (c) => {
     return c.json({ message: 'A token or challenge is required' }, 400);
   }
 
-  const state = await enableTotp(email, code);
-  if (!state) {
-    recordChallengeFailure(challengeJti);
-    return c.json({ message: 'Invalid verification code' }, 401);
+  let state = null;
+  if (skipTotp === true) {
+    try {
+      state = await activateUserWithoutTotp(email);
+    } catch (error) {
+      if (error instanceof UserValidationError) {
+        return c.json({ message: error.message }, 403);
+      }
+      throw error;
+    }
+    if (!state) {
+      return c.json({ message: 'Account not found' }, 404);
+    }
+  } else {
+    state = await enableTotp(email, String(code));
+    if (!state) {
+      recordChallengeFailure(challengeJti);
+      return c.json({ message: 'Invalid verification code' }, 401);
+    }
   }
 
   clearChallengeState(challengeJti);
@@ -124,7 +147,7 @@ setupRoutes.post('/api/setup/complete', setupLimiter, async (c) => {
   setSessionCookie(c, state.email, state.role, session.id);
 
   return c.json({
-    message: 'Two-factor authentication enabled',
+    message: state.totpEnabled ? 'Two-factor authentication enabled' : 'Account activated',
     email: state.email,
     role: state.role,
   });

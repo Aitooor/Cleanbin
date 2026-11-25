@@ -435,6 +435,37 @@ export async function startTotpSetup(email: string): Promise<string> {
   });
 }
 
+export async function activateUserWithoutTotp(email: string): Promise<AccountAuthState | null> {
+  const normalized = normalizeEmail(email);
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const row = await tx.queryOne<UserRow>('SELECT * FROM users WHERE email = ?', [normalized]);
+    if (!row) return null;
+
+    if (isEnvAdmin(normalized) || row.role === 'admin') {
+      throw new UserValidationError('Two-factor authentication is mandatory for administrator accounts');
+    }
+    if (!row.password_hash) {
+      throw new UserValidationError('A password is required before activating this account');
+    }
+
+    await tx.execute(
+      `UPDATE users
+       SET status = 'active', invite_token_hash = NULL, invite_expires_at = NULL
+       WHERE email = ?`,
+      [normalized]
+    );
+
+    return {
+      email: normalized,
+      role: 'user',
+      status: 'active',
+      totpEnabled: Boolean(row.totp_enabled_at),
+      invitePending: false,
+    };
+  });
+}
+
 export async function enableTotp(email: string, code: string): Promise<AccountAuthState | null> {
   const normalized = normalizeEmail(email);
   const db = await getDb();
