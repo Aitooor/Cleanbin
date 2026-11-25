@@ -291,36 +291,25 @@ export default function PasteViewPage() {
       };
     }
 
+    const normalizedContent = content.replace(/\r\n?/g, '\n');
+    const rawLines = normalizedContent.split('\n');
     let detectedLang = 'plaintext';
     let fullHtml = '';
 
     if (langOverride === 'plaintext') {
       detectedLang = 'plaintext';
-      fullHtml = content
+      fullHtml = normalizedContent
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
     } else if (langOverride !== 'auto' && hljs.getLanguage(langOverride)) {
-      const res = hljs.highlight(content, { language: langOverride, ignoreIllegals: true });
+      const res = hljs.highlight(normalizedContent, { language: langOverride, ignoreIllegals: true });
       detectedLang = langOverride;
       fullHtml = res.value;
     } else {
-      const res = hljs.highlightAuto(content);
+      const res = hljs.highlightAuto(normalizedContent);
       detectedLang = res.language || 'plaintext';
       fullHtml = res.value;
-    }
-
-    const rawLines = content.split(/\r?\n/);
-    const normalizedContent = rawLines.join('\n');
-    if (normalizedContent !== content) {
-      if (langOverride === 'plaintext') {
-        fullHtml = normalizedContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      } else {
-        fullHtml = hljs.highlight(normalizedContent, {
-          language: hljs.getLanguage(detectedLang) ? detectedLang : 'javascript',
-          ignoreIllegals: true,
-        }).value;
-      }
     }
 
     const linesHtml = splitHighlightedHtmlByLine(fullHtml);

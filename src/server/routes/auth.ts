@@ -65,7 +65,12 @@ authRoutes.post('/api/auth', loginLimiter, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const { email, password } = (body ?? {}) as Record<string, unknown>;
 
-  if (typeof email !== 'string' || typeof password !== 'string') {
+  if (
+    typeof email !== 'string' ||
+    typeof password !== 'string' ||
+    email.length > 254 ||
+    password.length > 128
+  ) {
     return c.json({ message: 'Invalid credentials' }, 401);
   }
 
@@ -122,9 +127,13 @@ authRoutes.post('/api/auth/register', loginLimiter, async (c) => {
   if (!isValidEmail(email)) {
     return c.json({ message: 'A valid email is required' }, 400);
   }
-  if (typeof password !== 'string' || password.length < SETUP_PASSWORD_MIN_LENGTH) {
+  if (
+    typeof password !== 'string' ||
+    password.length < SETUP_PASSWORD_MIN_LENGTH ||
+    password.length > 128
+  ) {
     return c.json(
-      { message: `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters.` },
+      { message: `Password must be between ${SETUP_PASSWORD_MIN_LENGTH} and 128 characters.` },
       400
     );
   }

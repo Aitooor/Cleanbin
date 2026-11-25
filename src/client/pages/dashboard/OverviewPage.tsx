@@ -126,8 +126,12 @@ export default function OverviewPage() {
                     </button>
                   </td>
                   <td>
-                    <span className={`cb-tag ${row.permanent ? 'cb-tag--perm' : ''}`}>
-                      {row.permanent ? 'perm' : 'temp'}
+                    <span
+                      className={`cb-tag ${
+                        row.permanent ? 'cb-tag--perm' : row.burnAfterRead ? 'cb-tag--warn' : ''
+                      }`}
+                    >
+                      {row.permanent ? 'perm' : row.burnAfterRead ? '1 read' : 'temp'}
                     </span>
                   </td>
                   <td style={{ color: '#666', whiteSpace: 'nowrap' }}>{formatDateTime(row.createdAt)}</td>

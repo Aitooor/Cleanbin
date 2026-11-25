@@ -278,6 +278,7 @@ export default function EditorPage({ cloneMode = false }: { cloneMode?: boolean 
           >
             <input
               type="text"
+              className="editor-name-input"
               placeholder={
                 isPermanent ? 'Enter name (required for permanent)' : 'Enter name (optional)'
               }
