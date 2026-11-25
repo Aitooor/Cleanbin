@@ -631,6 +631,26 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     if (!content.trim()) return jsonResponse({ message: 'Content cannot be empty' }, 400);
     if (permanent && !name) return jsonResponse({ message: 'Name is required for permanent pastes.' }, 400);
 
+    if (currentUser && currentUser.role !== 'admin') {
+      const owned = Array.from(pastes.values()).filter((p) => p.owner === currentUser!.email);
+      if (demoMaxPastesPerUser > 0 && owned.length >= demoMaxPastesPerUser) {
+        return jsonResponse(
+          { message: `Paste limit reached (${demoMaxPastesPerUser} pastes max). Delete unused pastes first.` },
+          403
+        );
+      }
+      if (demoMaxStorageMbPerUser > 0) {
+        const currentStored = owned.reduce((acc, p) => acc + estimateCompressedBytes(p.content), 0);
+        const added = estimateCompressedBytes(content);
+        if (currentStored + added > Math.round(demoMaxStorageMbPerUser * 1024 * 1024)) {
+          return jsonResponse(
+            { message: `Disk quota reached (${demoMaxStorageMbPerUser} MB max on disk).` },
+            403
+          );
+        }
+      }
+    }
+
     let id = randomShortId();
     while (pastes.has(id)) id = randomShortId();
 
@@ -653,7 +673,7 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       createdAt: nowIso,
       updatedAt: nowIso,
       ...(permanent ? {} : { expiresAt: new Date(Date.now() + ttlMs).toISOString() }),
-      owner: permanent && currentUser ? currentUser.email : null,
+      owner: currentUser ? currentUser.email : null,
       sharedWith: [],
       version: 1,
     };

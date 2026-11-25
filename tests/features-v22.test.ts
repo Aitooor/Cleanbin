@@ -5,7 +5,12 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { renderSVG } from 'uqr';
 import { createApp } from '../src/server/app.js';
-import { compressPayload, measureStoredBytes } from '../src/server/db/compression.js';
+import {
+  compressContentCompact,
+  compressPayload,
+  decompressRowContent,
+  measureStoredBytes,
+} from '../src/server/db/compression.js';
 import { getDb, resetDbForTests } from '../src/server/db/index.js';
 import { resetRateLimitsForTests } from '../src/server/middleware/rateLimit.js';
 import { createSessionToken } from '../src/server/services/auth.js';
@@ -322,12 +327,32 @@ describe('Cleanbin v2.2 — Ultra-Compact Storage, CLI /raw + API Tokens, Quotas
     expect(safeHtml).not.toContain('javascript:');
 
     const svg = renderSVG('otpauth://totp/Cleanbin:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Cleanbin', {
-      whiteColor: '#181818',
-      blackColor: '#e0e0e0',
-      border: 1,
+      whiteColor: '#e8e8e8',
+      blackColor: '#141414',
+      border: 2,
     });
     expect(svg.startsWith('<svg')).toBe(true);
-    expect(svg).toContain('#181818');
-    expect(svg).toContain('#e0e0e0');
+    expect(svg).toContain('#e8e8e8');
+    expect(svg).toContain('#141414');
+  });
+
+  it('round-trips compact payloads across Uint8Array (node:sqlite) and PostgreSQL/MySQL string dialects', async () => {
+    const text = 'export const answer = 42;\n'.repeat(20);
+    const sqliteOut = await compressContentCompact(text, 'sqlite');
+    expect(Buffer.isBuffer(sqliteOut.payload)).toBe(true);
+
+    // Simulate node:sqlite returning Uint8Array instead of Buffer
+    const asUint8 = new Uint8Array(sqliteOut.payload as Buffer);
+    const decodedUint8 = await decompressRowContent(asUint8);
+    expect(decodedUint8.isCompact).toBe(true);
+    expect(decodedUint8.content).toBe(text);
+
+    // Simulate PostgreSQL TEXT dialect
+    const pgOut = await compressContentCompact(text, 'postgres');
+    expect(typeof pgOut.payload).toBe('string');
+    expect((pgOut.payload as string).startsWith('b11:')).toBe(true);
+    const decodedPg = await decompressRowContent(pgOut.payload);
+    expect(decodedPg.isCompact).toBe(true);
+    expect(decodedPg.content).toBe(text);
   });
 });

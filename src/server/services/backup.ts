@@ -50,17 +50,18 @@ export async function runBackup(): Promise<string> {
     await db.backup(targetPath);
   } else {
     targetPath = path.join(backupDir, `cleanbin-${stamp}.json.br`);
-    const [meta, pastes, users, sessions, passkeys] = await Promise.all([
+    const [meta, pastes, users, sessions, passkeys, apiTokens] = await Promise.all([
       db.query('SELECT * FROM cleanbin_meta'),
       db.query('SELECT * FROM pastes'),
       db.query('SELECT * FROM users'),
       db.query('SELECT * FROM sessions'),
       db.query('SELECT * FROM passkeys'),
+      db.query('SELECT * FROM api_tokens'),
     ]);
     const dump = JSON.stringify({
       exportedAt: new Date().toISOString(),
       dialect: db.dialect,
-      tables: { cleanbin_meta: meta, pastes, users, sessions, passkeys },
+      tables: { cleanbin_meta: meta, pastes, users, sessions, passkeys, api_tokens: apiTokens },
     });
     const compressed = await brotliCompress(Buffer.from(dump, 'utf-8'));
     await fs.writeFile(targetPath, compressed);
