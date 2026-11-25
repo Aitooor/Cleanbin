@@ -1,0 +1,137 @@
+/* Original globals.css from Next.js Cleanbin — kept intact so /, /:id, /login,
+   and /setup preserve the exact original UI/UX pixel for pixel. */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  color-scheme: dark;
+  background-color: #1e1e1e !important;
+  color: #e0e0e0;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  overflow-x: hidden;
+  scrollbar-color: #383838 #1e1e1e;
+}
+
+body {
+  font-family: 'Roboto', sans-serif;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+a {
+  color: #1e88e5;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  background-color: #1e88e5;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 15px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+button:hover {
+  background-color: #1565c0;
+}
+
+.login-secondary-button:hover {
+  background-color: #2a2a2a !important;
+}
+
+input,
+textarea,
+select {
+  background-color: #1e1e1e;
+  color: #e0e0e0;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 10px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: #1e88e5;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: #ffffff;
+  margin-bottom: 15px;
+}
+
+p {
+  margin-bottom: 15px;
+}
+
+.main-container {
+  background-color: #1e1e1e !important;
+}
+
+/* Editor name hint: exact original mobile-first rules */
+.editor-name-hint {
+  margin: 0;
+  margin-bottom: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #666;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.editor-name-hint code {
+  background: #2a2a2a;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+@media (min-width: 37.5rem) {
+  .editor-name-hint {
+    margin-bottom: 10px;
+    font-size: 12px;
+  }
+  .editor-name-hint code {
+    display: inline;
+  }
+}
+
+/* Editor buttons: exact original mobile-first & top-right desktop placement */
+.editor-buttons {
+  display: flex;
+  gap: 10px;
+  background-color: #1e1e1e;
+  padding: 5px;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (min-width: 37.5rem) {
+  .editor-buttons {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+  }
+}

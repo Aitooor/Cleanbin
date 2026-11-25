@@ -1,57 +1,51 @@
 {
-  "name": "nextjs-pastebin",
-  "version": "1.0.0",
-  "description": "A modern, dark-themed Pastebin-like application built with Next.js.",
-  "main": "index.js",
-  "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start"
-  },
-  "keywords": [
-    "nextjs",
-    "pastebin",
-    "hastebin",
-    "dark-theme"
-  ],
+  "name": "cleanbin",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Minimalist pastebin built with Hono, Vite, React, and SQL.",
+  "type": "module",
   "author": "Aitooor",
   "license": "MIT",
+  "scripts": {
+    "dev": "tsx scripts/dev.ts",
+    "build": "vite build && tsc -p tsconfig.server.json",
+    "start": "node dist/server/server/index.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test": "vitest run",
+    "backup": "tsx scripts/backup.ts"
+  },
   "allowScripts": {
     "better-sqlite3": true,
-    "classic-level": true,
-    "sharp": true
+    "esbuild": true
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.11",
     "@simplewebauthn/browser": "^14.0.0",
     "@simplewebauthn/server": "^14.0.3",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.6.2",
-    "cassandra-driver": "^4.8.0",
-    "cookie": "^1.1.1",
     "dotenv": "^17.2.3",
     "highlight.js": "^11.11.1",
-    "ioredis": "^5.9.2",
-    "knex": "^3.1.0",
-    "level": "^10.0.0",
-    "mongodb": "^7.0.0",
-    "mysql2": "^3.16.2",
-    "next": "16.3.8",
-    "next-auth": "^4.24.13",
+    "hono": "^4.13.22",
+    "mysql2": "^3.24.6",
     "node-cron": "^4.2.1",
-    "path": "^0.12.7",
-    "pg": "^8.18.0",
+    "pg": "^8.23.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-icons": "^5.5.0",
-    "react-window": "^2.2.6",
-    "uuid": "^13.0.0"
+    "react-router-dom": "^7.18.7"
   },
   "devDependencies": {
-    "@types/dotenv": "^8.2.3",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.1.0",
     "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.2.10",
-    "@types/uuid": "^11.0.0",
-    "typescript": "^5.9.3"
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
   }
 }

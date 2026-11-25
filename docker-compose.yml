@@ -1,19 +1,19 @@
 services:
   web:
     image: aitooor/cleanbin:latest
+    build: .
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
-      # Required: set them in the host environment (never commit real credentials).
+      - TRUST_PROXY=1
       - ADMIN_EMAIL=${ADMIN_EMAIL}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      # Required: signs session cookies. Provide it from the host environment or a secrets file.
       - AUTH_SECRET=${AUTH_SECRET}
       - DATABASE__SAVE_TYPE=SQLite
-      - CACHE_TYPE=SQLite
+      - DATA_DIR=/app/data
       - DATABASE__SQLITE_DB_PATH=/app/data/pastes.db
     volumes:
       - ./data:/app/data

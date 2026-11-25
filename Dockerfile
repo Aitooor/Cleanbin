@@ -1,41 +1,26 @@
-# Etapa 1: build de la aplicación
-FROM node:22-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 
-# Crear directorio de trabajo
 WORKDIR /app
 
-# Copiar sólo los archivos necesarios para instalar dependencias
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
-
-# Instalar dependencias (usa npm por defecto; si prefieres yarn, adapta esto)
+COPY package.json package-lock.json* ./
 RUN npm ci
 
-# Copiar el resto del código de la app
 COPY . .
-
-# Compilar la aplicación Next.js en modo producción
 ENV NODE_ENV=production
-RUN mkdir -p public
-RUN npm run build
+RUN npm run build && npm prune --omit=dev
 
-# Etapa 2: runtime
-FROM node:22-alpine AS runner
+FROM node:22-bookworm-slim AS runner
 
 WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
 
-# Copiar sólo lo necesario desde la etapa de build
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/public ./public
 
-ENV NODE_ENV=production
-
-# Persist pastes and admins across container restarts.
 VOLUME /app/data
-
-# Next.js por defecto escucha en el puerto 3000
 EXPOSE 3000
 
-# Comando de inicio en producción
 CMD ["npm", "run", "start"]
