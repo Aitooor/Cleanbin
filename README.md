@@ -53,7 +53,7 @@ npm run dev
 | `npm run start` | Runs the production Hono server on `0.0.0.0:${PORT:-3000}` |
 | `npm run typecheck` | Runs strict TypeScript checks across client, shared, tests, and server |
 | `npm test` | Runs the Vitest automated test suite |
-| `npm run backup` | Creates a hot consistent snapshot in `DATA_DIR/backups/` |
+| `npm run backup` | Creates a hot consistent snapshot in `DATA_DIR/backups/` (also runs automatically daily via `BACKUP_CRON`, retaining `BACKUP_KEEP=7` snapshots) |
 
 ## SQL Engines
 

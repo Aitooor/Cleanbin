@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useNotification } from '../components/NotificationProvider';
 import { useSession } from '../hooks/useSession';
 
@@ -8,7 +8,32 @@ interface SetupSecret {
   otpauthUrl: string;
 }
 
-// Exact UI/UX of original pages/setup.tsx
+const cleanBtnPrimary: React.CSSProperties = {
+  width: '100%',
+  background: '#282828',
+  color: '#e0e0e0',
+  border: '1px solid #444',
+  borderRadius: 4,
+  padding: '9px 14px',
+  fontFamily: 'inherit',
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
+};
+
+const cleanBtnSecondary: React.CSSProperties = {
+  width: '100%',
+  marginTop: 8,
+  background: '#1e1e1e',
+  color: '#b0b0b0',
+  border: '1px solid #333',
+  borderRadius: 4,
+  padding: '9px 14px',
+  fontFamily: 'inherit',
+  fontSize: 12,
+  cursor: 'pointer',
+};
+
 export default function SetupPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -113,6 +138,7 @@ export default function SetupPage() {
     <div
       style={{
         minHeight: '100vh',
+        background: '#1e1e1e',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -125,68 +151,73 @@ export default function SetupPage() {
         style={{
           width: '100%',
           maxWidth: 420,
-          padding: 24,
-          background: '#232323',
-          border: '1px solid rgba(255,255,255,0.08)',
-          borderRadius: 10,
-          boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
+          padding: 22,
+          background: '#1e1e1e',
+          border: '1px solid #333',
+          borderRadius: 4,
         }}
       >
-        <h1 style={{ margin: '0 0 4px', fontSize: 20, color: '#e0e0e0' }}>Cleanbin</h1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+          <h1 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: '#e0e0e0' }}>cleanbin · setup</h1>
+          <Link to="/" style={{ fontSize: 11, color: '#666', textDecoration: 'none' }}>
+            ← editor
+          </Link>
+        </div>
 
         {fatal && (
-          <p style={{ margin: '0 0 18px', fontSize: 12, color: '#e07a7a', lineHeight: 1.5 }}>{fatal}</p>
+          <p style={{ margin: '8px 0 0', fontSize: 12, color: '#e07a7a', lineHeight: 1.5 }}>{fatal}</p>
         )}
 
         {!fatal && !secret && token && (
           <>
-            <p style={{ margin: '0 0 18px', fontSize: 12, color: '#777', lineHeight: 1.5 }}>
-              Step 1 of 2. Choose a password to activate your account.
+            <p style={{ margin: '0 0 16px', fontSize: 12, color: '#888', lineHeight: 1.5 }}>
+              Step 1 of 2 · Choose a password (10+ characters) to activate your account.
             </p>
             <input
               type="password"
-              placeholder="New password"
+              placeholder="new password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              style={{ marginBottom: 10 }}
+              style={{ marginBottom: 8, fontFamily: 'inherit', fontSize: 13 }}
             />
             <input
               type="password"
-              placeholder="Confirm password"
+              placeholder="confirm password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              style={{ marginBottom: 16 }}
+              style={{ marginBottom: 14, fontFamily: 'inherit', fontSize: 13 }}
             />
             <button
               onClick={() => void handlePasswordSubmit()}
               disabled={busy}
-              style={{ width: '100%', fontWeight: 600 }}
+              className="login-secondary-button"
+              style={cleanBtnPrimary}
             >
-              Continue
+              continue
             </button>
           </>
         )}
 
         {!fatal && secret && (
           <>
-            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#777', lineHeight: 1.5 }}>
-              Step 2 of 2. Add the secret key to your authenticator app, then enter the 6-digit code.
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888', lineHeight: 1.5 }}>
+              Step 2 of 2 · Add this secret key to your authenticator app, then enter the 6-digit code.
             </p>
             <div
               style={{
                 margin: '0 0 12px',
                 padding: 12,
-                background: '#1a1a1a',
+                background: '#181818',
                 border: '1px solid #333',
-                borderRadius: 6,
+                borderRadius: 4,
               }}
             >
-              <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>Secret key</div>
-              <code style={{ fontSize: 14, letterSpacing: 1, color: '#e0e0e0', wordBreak: 'break-all' }}>
+              <div style={{ fontSize: 11, color: '#777', marginBottom: 4 }}>secret key</div>
+              <code style={{ fontSize: 13, letterSpacing: 1, color: '#e0e0e0', wordBreak: 'break-all' }}>
                 {secret.groupedSecret}
               </code>
             </div>
-            <p style={{ margin: '0 0 16px', fontSize: 11, color: '#666', lineHeight: 1.5, wordBreak: 'break-all' }}>
+            <p style={{ margin: '0 0 14px', fontSize: 11, color: '#666', lineHeight: 1.5, wordBreak: 'break-all' }}>
               {secret.otpauthUrl}
             </p>
             <input
@@ -197,34 +228,28 @@ export default function SetupPage() {
               placeholder="123456"
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-              style={{ marginBottom: 16, letterSpacing: 4, textAlign: 'center' }}
+              style={{ marginBottom: 12, letterSpacing: 4, textAlign: 'center', fontFamily: 'inherit', fontSize: 13 }}
             />
             <button
               onClick={() => void handleActivate()}
               disabled={busy}
-              style={{ width: '100%', fontWeight: 600 }}
+              className="login-secondary-button"
+              style={cleanBtnPrimary}
             >
-              Activate 2FA
+              activate 2fa
             </button>
             <button
               onClick={() => navigate('/login')}
               className="login-secondary-button"
-              style={{
-                width: '100%',
-                marginTop: 10,
-                background: '#1e1e1e',
-                color: '#e0e0e0',
-                border: '1px solid #333',
-                fontWeight: 600,
-              }}
+              style={cleanBtnSecondary}
             >
-              Back to sign in
+              back to sign in
             </button>
           </>
         )}
 
         {!fatal && !token && !secret && (
-          <p style={{ margin: '12px 0 0', fontSize: 12, color: '#777' }}>Preparing setup...</p>
+          <p style={{ margin: '12px 0 0', fontSize: 12, color: '#888' }}>Preparing setup…</p>
         )}
       </div>
     </div>

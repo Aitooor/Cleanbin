@@ -21,9 +21,10 @@ interface DemoPaste {
 interface DemoUser {
   email: string;
   role: 'admin' | 'user';
-  status: 'active' | 'invited' | 'pending_2fa';
+  status: 'active' | 'invited';
   permanentDeleteLimit: number;
   totpEnabled: boolean;
+  invitePending: boolean;
   hasPasskey: boolean;
   immutable: boolean;
   createdAt: string;
@@ -59,6 +60,7 @@ export function resetDemoState(): void {
         status: 'active',
         permanentDeleteLimit: 0,
         totpEnabled: true,
+        invitePending: false,
         hasPasskey: false,
         immutable: true,
         createdAt: iso(-14 * 86400_000),
@@ -72,6 +74,7 @@ export function resetDemoState(): void {
         status: 'active',
         permanentDeleteLimit: 5,
         totpEnabled: true,
+        invitePending: false,
         hasPasskey: true,
         immutable: false,
         createdAt: iso(-7 * 86400_000),
@@ -85,6 +88,7 @@ export function resetDemoState(): void {
         status: 'invited',
         permanentDeleteLimit: 3,
         totpEnabled: false,
+        invitePending: true,
         hasPasskey: false,
         immutable: false,
         createdAt: iso(-86400_000),
@@ -97,10 +101,19 @@ export function resetDemoState(): void {
       id: 'demo-sess-current',
       email: 'demo@example.com',
       role: 'admin',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Browser Live Demo',
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/136.0',
       createdAt: iso(-600_000),
       lastSeenAt: iso(0),
       current: true,
+    },
+    {
+      id: 'demo-sess-laptop',
+      email: 'demo@example.com',
+      role: 'admin',
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) Firefox/135.0',
+      createdAt: iso(-2 * 86400_000),
+      lastSeenAt: iso(-3600_000),
+      current: false,
     },
   ];
 
@@ -297,6 +310,7 @@ function filterPastesList(params: {
   let list = Array.from(pastes.values()).filter((p) => {
     if (params.scope === 'mine') return Boolean(email && p.owner === email);
     if (params.scope === 'shared') return Boolean(email && p.sharedWith.includes(email));
+    if (params.scope === 'anonymous') return p.owner === null;
     if (currentUser?.role === 'admin') return true;
     return Boolean(email && (p.owner === email || p.sharedWith.includes(email)));
   });
@@ -333,6 +347,7 @@ function filterPastesList(params: {
 
 async function handleApiRequest(url: URL, method: string, init?: RequestInit): Promise<Response> {
   const path = url.pathname;
+  const baseUrl = import.meta.env.BASE_URL || '/Cleanbin/';
 
   // Auth & Session
   if (path === '/api/auth' && method === 'GET') {
@@ -407,15 +422,21 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     const id = url.searchParams.get('id') || '';
     const found = pastes.get(id);
     if (!found) return jsonResponse({ message: 'Paste not found' }, 404);
-    return jsonResponse(decoratePaste(found));
+    return jsonResponse({
+      id: found.id,
+      content: found.content,
+      name: found.name,
+      permanent: found.permanent,
+    });
   }
 
   if (path === '/api/paste' && method === 'POST') {
     const body = await parseJson(init);
     const content = typeof body.content === 'string' ? body.content : '';
     const name = typeof body.name === 'string' ? body.name.trim() : '';
-    const permanent = Boolean(body.permanent && currentUser);
+    const permanent = Boolean(currentUser && body.permanent !== false && body.permanent !== 'false');
     if (!content.trim()) return jsonResponse({ message: 'Content cannot be empty' }, 400);
+    if (permanent && !name) return jsonResponse({ message: 'Name is required for permanent pastes.' }, 400);
 
     let id = randomShortId();
     while (pastes.has(id)) id = randomShortId();
@@ -441,22 +462,42 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     return jsonResponse({ editors: {} });
   }
 
+  // Share collaborator add/remove (/api/paste/:id/share)
   const shareMatch = path.match(/^\/api\/paste\/([^/]+)\/share$/);
   if (shareMatch && method === 'POST') {
     const id = decodeURIComponent(shareMatch[1]);
     const item = pastes.get(id);
-    if (!item) return jsonResponse({ message: 'Not found' }, 404);
+    if (!item) return jsonResponse({ message: 'Paste not found' }, 404);
     const body = await parseJson(init);
-    const sharedWith = Array.isArray(body.sharedWith)
-      ? body.sharedWith.map((v) => String(v).trim().toLowerCase()).filter(Boolean)
-      : [];
-    item.sharedWith = Array.from(new Set(sharedWith));
-    return jsonResponse({ id, sharedWith: item.sharedWith });
+    const target = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const action = body.action;
+    if (action === 'add' || action === 'remove') {
+      if (!target || !target.includes('@')) {
+        return jsonResponse({ message: 'A valid email is required' }, 400);
+      }
+      if (action === 'add') {
+        if (!users.has(target)) {
+          return jsonResponse({ message: 'No user account exists with that email' }, 404);
+        }
+        if (item.owner === target) {
+          return jsonResponse({ message: 'The owner already has access' }, 400);
+        }
+        if (!item.sharedWith.includes(target)) item.sharedWith = [...item.sharedWith, target];
+      } else {
+        item.sharedWith = item.sharedWith.filter((e) => e !== target);
+      }
+      return jsonResponse({ sharedWith: item.sharedWith, owner: item.owner });
+    }
+    if (Array.isArray(body.sharedWith)) {
+      item.sharedWith = Array.from(new Set(body.sharedWith.map((v) => String(v).trim().toLowerCase()).filter(Boolean)));
+      return jsonResponse({ sharedWith: item.sharedWith, owner: item.owner });
+    }
+    return jsonResponse({ message: 'Action must be "add" or "remove"' }, 400);
   }
 
   const presenceMatch = path.match(/^\/api\/paste\/([^/]+)\/presence$/);
   if (presenceMatch) {
-    return jsonResponse({ editors: [] });
+    return jsonResponse({ self: currentUser?.email ?? '', editors: [] });
   }
 
   const pasteMatch = path.match(/^\/api\/paste\/([^/]+)$/);
@@ -472,22 +513,53 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       return jsonResponse(decoratePaste(item));
     }
 
-    if (method === 'PUT') {
+    if (method === 'PATCH' || method === 'PUT') {
       const body = await parseJson(init);
-      if (typeof body.content === 'string') item.content = body.content;
-      if (typeof body.name === 'string') item.name = body.name;
-      if (typeof body.permanent === 'boolean') {
-        item.permanent = body.permanent;
-        item.expiresAt = body.permanent ? undefined : new Date(Date.now() + 30 * 86400_000).toISOString();
+      if (typeof body.version === 'number' && body.version !== item.version) {
+        return jsonResponse(
+          {
+            error: 'This paste was changed by someone else while you were editing it.',
+            paste: {
+              id: item.id,
+              name: item.name,
+              content: item.content,
+              version: item.version,
+              updatedAt: item.updatedAt,
+            },
+          },
+          409
+        );
+      }
+      if (typeof body.name === 'string') {
+        const trimmed = body.name.trim();
+        if (item.permanent && !trimmed) {
+          return jsonResponse({ message: 'Name is required for permanent pastes' }, 400);
+        }
+        item.name = trimmed;
+      }
+      if (typeof body.content === 'string') {
+        if (!body.content) return jsonResponse({ message: 'Invalid content' }, 400);
+        item.content = body.content;
       }
       item.updatedAt = new Date().toISOString();
       item.version += 1;
-      return jsonResponse(decoratePaste(item));
+      return jsonResponse({
+        success: true,
+        paste: {
+          id: item.id,
+          name: item.name,
+          content: item.content,
+          owner: item.owner,
+          sharedWith: item.sharedWith,
+          version: item.version,
+          updatedAt: item.updatedAt,
+        },
+      });
     }
 
     if (method === 'DELETE') {
       pastes.delete(id);
-      return jsonResponse({ message: 'Deleted', id });
+      return jsonResponse({ success: true, id });
     }
   }
 
@@ -558,7 +630,7 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     return jsonResponse({ deleted: deleted.length, ids: deleted });
   }
 
-  // Team accounts (/api/users) — returns array matching usersRoutes.get('/api/users')
+  // Team accounts (/api/users)
   if (path === '/api/users' && method === 'GET') {
     return jsonResponse(Array.from(users.values()));
   }
@@ -577,12 +649,13 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       status: 'invited',
       permanentDeleteLimit: limit,
       totpEnabled: false,
+      invitePending: true,
       hasPasskey: false,
       immutable: false,
       createdAt: new Date().toISOString(),
     };
     users.set(email, record);
-    const setupUrl = `${window.location.origin}${import.meta.env.BASE_URL}#/setup?invite=demo-${randomShortId()}`;
+    const setupUrl = `${window.location.origin}${baseUrl}#/setup?token=demo-${randomShortId()}`;
     return jsonResponse({ ...record, emailSent: false, setupUrl }, 201);
   }
 
@@ -599,13 +672,18 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
 
     if (method === 'PATCH') {
       const body = await parseJson(init);
-      const setupUrl = `${window.location.origin}${import.meta.env.BASE_URL}#/setup?invite=demo-${randomShortId()}`;
+      const setupUrl = `${window.location.origin}${baseUrl}#/setup?token=demo-${randomShortId()}`;
       if (body.action === 'resend-invite' || body.action === 'reset-password') {
         if (body.action === 'reset-password') {
           record.totpEnabled = false;
           record.hasPasskey = false;
+          record.invitePending = true;
         }
         return jsonResponse({ emailSent: false, setupUrl });
+      }
+      if (body.action === 'reset-2fa') {
+        record.totpEnabled = false;
+        return jsonResponse({ message: 'Two-factor authentication reset' });
       }
       if (body.action === 'remove-passkey') {
         record.hasPasskey = false;
@@ -626,6 +704,7 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       email: 'invited@example.com',
       needsPassword: true,
       secret: 'JBSWY3DPEHPK3PXP',
+      groupedSecret: 'JBSW Y3DP EHPK 3PXP',
       otpauthUrl: 'otpauth://totp/Cleanbin:invited@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Cleanbin',
     });
   }

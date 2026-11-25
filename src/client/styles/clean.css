@@ -139,15 +139,15 @@
 
 .cb-dash .cb-btn--primary,
 .cb-backdrop .cb-btn--primary {
-  border-color: var(--cb-accent);
+  border-color: #4a4a4a;
   color: #ffffff;
-  background-color: #19324a;
+  background-color: #282828;
 }
 
 .cb-dash .cb-btn--primary:hover:not(:disabled),
 .cb-backdrop .cb-btn--primary:hover:not(:disabled) {
-  background-color: var(--cb-accent);
-  border-color: var(--cb-accent);
+  background-color: #323232;
+  border-color: #606060;
 }
 
 .cb-dash .cb-btn--danger,

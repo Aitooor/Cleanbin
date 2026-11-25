@@ -3,11 +3,13 @@ import { getConfig } from './config.js';
 import { getDb, resetDbForTests } from './db/index.js';
 import { createApp } from './app.js';
 import { startExpiryCron, stopExpiryCron } from './services/pastesCache.js';
+import { startBackupCron, stopBackupCron } from './services/backup.js';
 
 async function main() {
   const cfg = getConfig();
   await getDb();
   startExpiryCron();
+  startBackupCron();
 
   const app = createApp();
   const server = serve(
@@ -23,6 +25,7 @@ async function main() {
 
   const shutdown = async () => {
     stopExpiryCron();
+    stopBackupCron();
     server.close();
     await resetDbForTests();
     process.exit(0);
