@@ -50,19 +50,36 @@ async function upgradeExistingSqliteSchema(adapter: SqlAdapter): Promise<void> {
     if (!existing.has('burn_after_read')) {
       await adapter.execute('ALTER TABLE pastes ADD COLUMN burn_after_read INTEGER NOT NULL DEFAULT 0');
     }
+    if (!existing.has('sliding_ttl')) {
+      await adapter.execute('ALTER TABLE pastes ADD COLUMN sliding_ttl INTEGER NOT NULL DEFAULT 1');
+    }
+    if (!existing.has('raw_bytes')) {
+      await adapter.execute('ALTER TABLE pastes ADD COLUMN raw_bytes INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!existing.has('stored_bytes')) {
+      await adapter.execute('ALTER TABLE pastes ADD COLUMN stored_bytes INTEGER NOT NULL DEFAULT 0');
+    }
+  }
+}
+
+async function ensureMysqlColumn(adapter: SqlAdapter, table: string, col: string, definition: string): Promise<void> {
+  const cols = await adapter.query(`SHOW COLUMNS FROM ${table} LIKE ?`, [col]);
+  if (cols.length === 0) {
+    await adapter.execute(`ALTER TABLE ${table} ADD COLUMN ${col} ${definition}`);
   }
 }
 
 async function upgradeNonSqlitePastesColumns(adapter: SqlAdapter): Promise<void> {
   if (adapter.dialect === 'postgres') {
-    await adapter.execute(
-      'ALTER TABLE pastes ADD COLUMN IF NOT EXISTS burn_after_read INTEGER NOT NULL DEFAULT 0'
-    );
+    await adapter.execute('ALTER TABLE pastes ADD COLUMN IF NOT EXISTS burn_after_read INTEGER NOT NULL DEFAULT 0');
+    await adapter.execute('ALTER TABLE pastes ADD COLUMN IF NOT EXISTS sliding_ttl INTEGER NOT NULL DEFAULT 1');
+    await adapter.execute('ALTER TABLE pastes ADD COLUMN IF NOT EXISTS raw_bytes INTEGER NOT NULL DEFAULT 0');
+    await adapter.execute('ALTER TABLE pastes ADD COLUMN IF NOT EXISTS stored_bytes INTEGER NOT NULL DEFAULT 0');
   } else if (adapter.dialect === 'mysql') {
-    const cols = await adapter.query('SHOW COLUMNS FROM pastes LIKE ?', ['burn_after_read']);
-    if (cols.length === 0) {
-      await adapter.execute('ALTER TABLE pastes ADD COLUMN burn_after_read INTEGER NOT NULL DEFAULT 0');
-    }
+    await ensureMysqlColumn(adapter, 'pastes', 'burn_after_read', 'INTEGER NOT NULL DEFAULT 0');
+    await ensureMysqlColumn(adapter, 'pastes', 'sliding_ttl', 'INTEGER NOT NULL DEFAULT 1');
+    await ensureMysqlColumn(adapter, 'pastes', 'raw_bytes', 'INTEGER NOT NULL DEFAULT 0');
+    await ensureMysqlColumn(adapter, 'pastes', 'stored_bytes', 'INTEGER NOT NULL DEFAULT 0');
   }
 }
 
@@ -88,7 +105,10 @@ export async function ensureSchema(adapter: SqlAdapter): Promise<void> {
       owner VARCHAR(255) NULL,
       shared_with TEXT NOT NULL,
       version INTEGER NOT NULL DEFAULT 1,
-      burn_after_read INTEGER NOT NULL DEFAULT 0
+      burn_after_read INTEGER NOT NULL DEFAULT 0,
+      sliding_ttl INTEGER NOT NULL DEFAULT 1,
+      raw_bytes INTEGER NOT NULL DEFAULT 0,
+      stored_bytes INTEGER NOT NULL DEFAULT 0
     )
   `);
 
@@ -141,4 +161,17 @@ export async function ensureSchema(adapter: SqlAdapter): Promise<void> {
       PRIMARY KEY (email, rp_id)
     )
   `);
+
+  await adapter.execute(`
+    CREATE TABLE IF NOT EXISTS api_tokens (
+      id VARCHAR(64) PRIMARY KEY,
+      email VARCHAR(255) NOT NULL,
+      name VARCHAR(120) NOT NULL,
+      token_prefix VARCHAR(20) NOT NULL,
+      token_hash VARCHAR(128) NOT NULL UNIQUE,
+      created_at VARCHAR(64) NOT NULL,
+      last_used_at VARCHAR(64) NULL
+    )
+  `);
+  await createIndexSafe(adapter, 'idx_api_tokens_email', 'api_tokens', 'email');
 }

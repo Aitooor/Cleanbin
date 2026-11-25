@@ -11,6 +11,7 @@ import { setupRoutes } from './routes/setup.js';
 import { usersRoutes } from './routes/users.js';
 import { sessionsRoutes } from './routes/sessions.js';
 import { settingsRoutes } from './routes/settings.js';
+import { tokensRoutes } from './routes/tokens.js';
 
 const MIME_BY_EXT: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -65,6 +66,7 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   app.route('/', usersRoutes);
   app.route('/', sessionsRoutes);
   app.route('/', settingsRoutes);
+  app.route('/', tokensRoutes);
 
   app.all('/api/*', (c) => {
     return c.json({ error: 'Not found', message: 'API route not found' }, 404);
@@ -74,12 +76,12 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   // and SQL session state BEFORE serving the SPA shell.
   app.use('/dashboard', async (c, next) => {
     const session = await getOptionalActiveSession(c);
-    if (!session) return c.redirect('/login', 302);
+    if (!session || session.isApiToken) return c.redirect('/login', 302);
     await next();
   });
   app.use('/dashboard/*', async (c, next) => {
     const session = await getOptionalActiveSession(c);
-    if (!session) return c.redirect('/login', 302);
+    if (!session || session.isApiToken) return c.redirect('/login', 302);
     await next();
   });
 

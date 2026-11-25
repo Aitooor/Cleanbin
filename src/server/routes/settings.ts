@@ -1,5 +1,8 @@
 import { Hono } from 'hono';
 import { getOptionalActiveSession, requireAdmin } from '../middleware/auth.js';
+import { isMailerConfigured } from '../services/mailer.js';
+import { compactAllPastes, getStorageStats } from '../services/pastes.js';
+import { invalidateCache } from '../services/pastesCache.js';
 import { getServerSettings, updateServerSettings } from '../services/settings.js';
 import type { RegistrationMode } from '../../shared/types.js';
 
@@ -11,12 +14,18 @@ settingsRoutes.get('/api/settings', async (c) => {
     getOptionalActiveSession(c),
   ]);
 
-  if (session?.role === 'admin') {
-    return c.json(settings);
+  if (session?.role === 'admin' && !session.isApiToken) {
+    const storage = await getStorageStats();
+    return c.json({
+      ...settings,
+      mailerConfigured: isMailerConfigured(),
+      storage,
+    });
   }
 
   return c.json({
     registrationMode: settings.registrationMode,
+    requireEmailVerification: settings.requireEmailVerification && isMailerConfigured(),
   });
 });
 
@@ -25,9 +34,21 @@ settingsRoutes.patch('/api/settings', async (c) => {
   if (admin instanceof Response) return admin;
 
   const body = await c.req.json().catch(() => ({}));
-  const { registrationMode, defaultUserDeleteLimit } = (body ?? {}) as Record<string, unknown>;
+  const {
+    registrationMode,
+    requireEmailVerification,
+    defaultUserDeleteLimit,
+    maxPastesPerUser,
+    maxStorageMbPerUser,
+  } = (body ?? {}) as Record<string, unknown>;
 
-  const patch: { registrationMode?: RegistrationMode; defaultUserDeleteLimit?: number } = {};
+  const patch: {
+    registrationMode?: RegistrationMode;
+    requireEmailVerification?: boolean;
+    defaultUserDeleteLimit?: number;
+    maxPastesPerUser?: number;
+    maxStorageMbPerUser?: number;
+  } = {};
 
   if (registrationMode !== undefined) {
     if (registrationMode !== 'invite' && registrationMode !== 'open') {
@@ -36,14 +57,64 @@ settingsRoutes.patch('/api/settings', async (c) => {
     patch.registrationMode = registrationMode;
   }
 
+  if (requireEmailVerification !== undefined) {
+    if (typeof requireEmailVerification !== 'boolean') {
+      return c.json({ message: 'requireEmailVerification must be a boolean' }, 400);
+    }
+    if (requireEmailVerification && !isMailerConfigured()) {
+      return c.json(
+        {
+          message:
+            'Email delivery (RESEND_API_KEY + MAIL_FROM) must be configured before requiring email verification.',
+        },
+        400
+      );
+    }
+    patch.requireEmailVerification = requireEmailVerification;
+  }
+
   if (defaultUserDeleteLimit !== undefined) {
-    const parsed = typeof defaultUserDeleteLimit === 'number' ? defaultUserDeleteLimit : Number(defaultUserDeleteLimit);
+    const parsed =
+      typeof defaultUserDeleteLimit === 'number'
+        ? defaultUserDeleteLimit
+        : Number(defaultUserDeleteLimit);
     if (!Number.isInteger(parsed) || parsed < 0) {
       return c.json({ message: 'defaultUserDeleteLimit must be an integer >= 0' }, 400);
     }
     patch.defaultUserDeleteLimit = parsed;
   }
 
+  if (maxPastesPerUser !== undefined) {
+    const parsed = typeof maxPastesPerUser === 'number' ? maxPastesPerUser : Number(maxPastesPerUser);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      return c.json({ message: 'maxPastesPerUser must be an integer >= 0 (0 = unlimited)' }, 400);
+    }
+    patch.maxPastesPerUser = parsed;
+  }
+
+  if (maxStorageMbPerUser !== undefined) {
+    const parsed =
+      typeof maxStorageMbPerUser === 'number' ? maxStorageMbPerUser : Number(maxStorageMbPerUser);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return c.json({ message: 'maxStorageMbPerUser must be a number >= 0 (0 = unlimited)' }, 400);
+    }
+    patch.maxStorageMbPerUser = parsed;
+  }
+
   const updated = await updateServerSettings(patch);
-  return c.json(updated);
+  const storage = await getStorageStats();
+  return c.json({
+    ...updated,
+    mailerConfigured: isMailerConfigured(),
+    storage,
+  });
+});
+
+settingsRoutes.post('/api/settings/compact', async (c) => {
+  const admin = await requireAdmin(c);
+  if (admin instanceof Response) return admin;
+
+  const storage = await compactAllPastes();
+  invalidateCache();
+  return c.json({ storage });
 });

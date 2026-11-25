@@ -14,6 +14,7 @@ export interface SessionPayload {
   role: SessionRole;
   sid: string;
   exp: number;
+  isApiToken?: boolean;
 }
 
 export type AuthChallengePurpose = 'totp' | 'setup';
@@ -206,7 +207,13 @@ export function resolveHost(c: Context): string {
     const forwardedHost = c.req.header('x-forwarded-host')?.split(',')[0]?.trim();
     if (forwardedHost) return forwardedHost;
   }
-  return c.req.header('host')?.trim() || 'localhost';
+  const hostHeader = c.req.header('host')?.trim();
+  if (hostHeader) return hostHeader;
+  try {
+    return new URL(c.req.url).host || 'localhost';
+  } catch {
+    return 'localhost';
+  }
 }
 
 export function resolveOrigin(c: Context): string {

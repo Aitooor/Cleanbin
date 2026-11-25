@@ -41,6 +41,7 @@ export interface CreateUserInput {
   password?: string;
   role: UserRole;
   permanentDeleteLimit: number;
+  requireInviteVerification?: boolean;
 }
 
 export interface CreateUserResult {
@@ -173,9 +174,10 @@ export async function createUser(input: CreateUserInput): Promise<CreateUserResu
   }
 
   const passwordHash = hasPassword ? await bcrypt.hash(input.password as string, BCRYPT_ROUNDS) : '';
-  const invite = hasPassword ? null : generateInviteToken();
+  const needsInvite = !hasPassword || input.requireInviteVerification === true;
+  const invite = needsInvite ? generateInviteToken() : null;
   const createdAt = new Date().toISOString();
-  const status: UserStatus = hasPassword ? 'active' : 'invited';
+  const status: UserStatus = needsInvite ? 'invited' : 'active';
 
   const db = await getDb();
   await db.transaction(async (tx) => {
@@ -358,6 +360,17 @@ export async function resolveInviteEmail(token: string): Promise<string | null> 
   if (!matched || !matched.invite_expires_at) return null;
   if (new Date(matched.invite_expires_at).getTime() < Date.now()) return null;
   return matched.email;
+}
+
+export async function hasStoredPassword(email: string): Promise<boolean> {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  const db = await getDb();
+  const row = await db.queryOne<{ password_hash: string }>(
+    'SELECT password_hash FROM users WHERE email = ?',
+    [normalized]
+  );
+  return Boolean(row?.password_hash);
 }
 
 export async function setUserPassword(email: string, password: string): Promise<void> {

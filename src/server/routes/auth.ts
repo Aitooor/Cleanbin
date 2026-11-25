@@ -6,14 +6,18 @@ import {
   clearChallengeState,
   createAuthChallenge,
   recordChallengeFailure,
+  resolveOrigin,
   resolveRpID,
   setSessionCookie,
   verifyAuthChallenge,
 } from '../services/auth.js';
+import { buildSetupUrl } from '../services/invites.js';
+import { isMailerConfigured, sendRegistrationVerificationEmail } from '../services/mailer.js';
 import { hasPasskey } from '../services/passkeys.js';
 import { createUserSession } from '../services/sessions.js';
 import {
   createUser,
+  deleteUser,
   getAccountState,
   getPermanentDeleteLimit,
   SETUP_PASSWORD_MIN_LENGTH,
@@ -139,12 +143,34 @@ authRoutes.post('/api/auth/register', loginLimiter, async (c) => {
   }
 
   try {
-    const { user } = await createUser({
+    const mustVerifyEmail = settings.requireEmailVerification && isMailerConfigured();
+    const { user, inviteToken } = await createUser({
       email,
       password,
       role: 'user',
       permanentDeleteLimit: settings.defaultUserDeleteLimit,
+      requireInviteVerification: mustVerifyEmail,
     });
+
+    if (mustVerifyEmail && inviteToken) {
+      const setupUrl = `${buildSetupUrl(inviteToken, resolveOrigin(c))}&verified=1`;
+      const delivery = await sendRegistrationVerificationEmail(user.email, setupUrl);
+      if (!delivery.sent) {
+        await deleteUser(user.email).catch(() => {});
+        return c.json(
+          { message: 'Could not send verification email right now. Please try again later.' },
+          502
+        );
+      }
+      return c.json(
+        {
+          verificationEmailSent: true,
+          email: user.email,
+        },
+        201
+      );
+    }
+
     return c.json(
       {
         setupRequired: true,

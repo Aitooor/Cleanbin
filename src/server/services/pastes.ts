@@ -1,15 +1,23 @@
 import { getConfig } from '../config.js';
 import { getDb } from '../db/index.js';
-import { compressPayload, decompressPayload } from '../db/compression.js';
+import type { SqlAdapter } from '../db/adapter.js';
+import {
+  compressContentCompact,
+  decompressRowContent,
+  measureStoredBytes,
+} from '../db/compression.js';
 import { normalizeEmail } from '../../shared/validation.js';
-import type { PasteRecord, PasteTtlOption } from '../../shared/types.js';
+import type { PasteRecord, PasteTtlOption, StorageStats } from '../../shared/types.js';
 
 interface PasteRow {
   id: string;
   name: string;
-  payload: string;
+  payload: string | Buffer | Uint8Array;
   permanent: number | string;
   burn_after_read?: number | string;
+  sliding_ttl?: number | string;
+  raw_bytes?: number | string;
+  stored_bytes?: number | string;
   created_at: number | string;
   updated_at: number | string;
   expires_at: number | string | null;
@@ -23,6 +31,8 @@ export interface PasteMetadata {
   name: string;
   permanent: boolean;
   burnAfterRead: boolean;
+  rawBytes: number;
+  storedBytes: number;
   createdAt: string;
   updatedAt: string;
   expiresAt: string | null;
@@ -76,21 +86,26 @@ function isRowExpired(row: Pick<PasteRow, 'permanent' | 'expires_at'>, nowMs = D
 }
 
 async function decodeRow(row: PasteRow): Promise<PasteRecord> {
-  const decoded = JSON.parse(await decompressPayload(row.payload)) as Record<string, unknown>;
+  const decoded = await decompressRowContent(row.payload);
+  const legacy = decoded.legacyMeta ?? {};
   const permanent = Number(row.permanent) === 1;
   const burnAfterRead =
-    Number(row.burn_after_read ?? 0) === 1 || decoded.burnAfterRead === true;
+    Number(row.burn_after_read ?? 0) === 1 || legacy.burnAfterRead === true;
+  const slidingTtl =
+    row.sliding_ttl !== undefined
+      ? Number(row.sliding_ttl) !== 0 && legacy.slidingTtl !== false
+      : legacy.slidingTtl !== false;
   const createdAtMs = Number(row.created_at) || Date.now();
   const updatedAtMs = Number(row.updated_at) || createdAtMs;
   const expiresAtMs = !permanent && row.expires_at !== null ? Number(row.expires_at) : null;
 
   return {
     id: row.id,
-    content: typeof decoded.content === 'string' ? decoded.content : '',
-    name: row.name ?? (typeof decoded.name === 'string' ? decoded.name : ''),
+    content: decoded.content,
+    name: row.name || (typeof legacy.name === 'string' ? legacy.name : ''),
     permanent,
     burnAfterRead,
-    slidingTtl: decoded.slidingTtl !== false,
+    slidingTtl,
     createdAt: new Date(createdAtMs).toISOString(),
     updatedAt: new Date(updatedAtMs).toISOString(),
     expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : null,
@@ -136,12 +151,39 @@ export async function createPaste(
       expiresAtMs = computeDefaultExpiryMs(nowMs);
       slidingTtl = true;
     }
+  } else {
+    slidingTtl = false;
   }
 
   const normalizedOwner = owner ? normalizeEmail(owner) : null;
   const shared = (opts.sharedWith ?? []).map((e) => normalizeEmail(e)).filter(Boolean);
 
-  const record: PasteRecord = {
+  const db = await getDb();
+  const compact = await compressContentCompact(content, db.dialect);
+
+  await db.execute(
+    `INSERT INTO pastes (
+      id, name, payload, permanent, burn_after_read, sliding_ttl,
+      raw_bytes, stored_bytes, created_at, updated_at, expires_at, owner, shared_with, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [
+      id,
+      name,
+      compact.payload,
+      permanent ? 1 : 0,
+      burnAfterRead ? 1 : 0,
+      slidingTtl ? 1 : 0,
+      compact.rawBytes,
+      compact.storedBytes,
+      nowMs,
+      nowMs,
+      expiresAtMs,
+      normalizedOwner,
+      JSON.stringify(shared),
+    ]
+  );
+
+  return {
     id,
     content,
     name,
@@ -155,34 +197,12 @@ export async function createPaste(
     sharedWith: shared,
     version: 1,
   };
-
-  const payload = await compressPayload(JSON.stringify(record));
-  const db = await getDb();
-  await db.execute(
-    `INSERT INTO pastes (id, name, payload, permanent, burn_after_read, created_at, updated_at, expires_at, owner, shared_with, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    [
-      id,
-      name,
-      payload,
-      permanent ? 1 : 0,
-      burnAfterRead ? 1 : 0,
-      nowMs,
-      nowMs,
-      expiresAtMs,
-      normalizedOwner,
-      JSON.stringify(shared),
-    ]
-  );
-
-  return record;
 }
 
 // Reads a paste by ID.
 // - When `options.touch === true` (an actual visit to `/:id` or `/raw/:id`):
 //   * If `burnAfterRead` is true, atomically deletes the paste from SQL and returns `burned: true`.
-//   * If `slidingTtl` is true on a temporary paste, extends `expires_at` by `PASTE_EXPIRATION_DAYS`.
-// - Internal reads (`touch: false`) never burn or extend TTL.
+//   * If `slidingTtl` is true on a temporary paste, updates ONLY `expires_at` (zero payload re-write!).
 export async function getPaste(
   id: string,
   options: { touch?: boolean } = {}
@@ -195,17 +215,18 @@ export async function getPaste(
     if (!row) return null;
     if (isRowExpired(row, nowMs)) {
       await db.execute('DELETE FROM pastes WHERE id = ?', [id]);
+      await db.reclaimPages?.();
       return null;
     }
     return decodeRow(row);
   }
 
-  return db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
     const row = await tx.queryOne<PasteRow>('SELECT * FROM pastes WHERE id = ?', [id]);
-    if (!row) return null;
+    if (!row) return { record: null as PasteRecord | null, deleted: false };
     if (isRowExpired(row, nowMs)) {
       await tx.execute('DELETE FROM pastes WHERE id = ?', [id]);
-      return null;
+      return { record: null as PasteRecord | null, deleted: true };
     }
 
     const decoded = await decodeRow(row);
@@ -213,41 +234,49 @@ export async function getPaste(
     if (decoded.burnAfterRead) {
       await tx.execute('DELETE FROM pastes WHERE id = ?', [id]);
       return {
-        ...decoded,
-        burned: true,
-        expiresAt: null,
+        record: {
+          ...decoded,
+          burned: true,
+          expiresAt: null,
+        },
+        deleted: true,
       };
     }
 
     if (decoded.permanent || decoded.slidingTtl === false) {
-      return decoded;
+      return { record: decoded, deleted: false };
     }
 
     const newExpiresMs = computeDefaultExpiryMs(nowMs);
-    const refreshed: PasteRecord = {
-      ...decoded,
-      expiresAt: new Date(newExpiresMs).toISOString(),
+    await tx.execute('UPDATE pastes SET expires_at = ? WHERE id = ?', [newExpiresMs, id]);
+    return {
+      record: {
+        ...decoded,
+        expiresAt: new Date(newExpiresMs).toISOString(),
+      },
+      deleted: false,
     };
-    const compressed = await compressPayload(JSON.stringify(refreshed));
-    await tx.execute('UPDATE pastes SET payload = ?, expires_at = ? WHERE id = ?', [
-      compressed,
-      newExpiresMs,
-      id,
-    ]);
-    return refreshed;
   });
+
+  if (outcome.deleted) {
+    await db.reclaimPages?.();
+  }
+  return outcome.record;
 }
 
-// Fast metadata lookup that skips Brotli decompression altogether.
+// Fast metadata lookup that skips Brotli decompression and SQLite overflow pages.
 export async function getPasteMetadata(id: string): Promise<PasteMetadata | null> {
   const db = await getDb();
   const row = await db.queryOne<Omit<PasteRow, 'payload'>>(
-    'SELECT id, name, permanent, burn_after_read, created_at, updated_at, expires_at, owner, shared_with, version FROM pastes WHERE id = ?',
+    `SELECT id, name, permanent, burn_after_read, raw_bytes, stored_bytes,
+            created_at, updated_at, expires_at, owner, shared_with, version
+     FROM pastes WHERE id = ?`,
     [id]
   );
   if (!row) return null;
   if (isRowExpired(row)) {
     await db.execute('DELETE FROM pastes WHERE id = ?', [id]);
+    await db.reclaimPages?.();
     return null;
   }
   const permanent = Number(row.permanent) === 1;
@@ -260,6 +289,8 @@ export async function getPasteMetadata(id: string): Promise<PasteMetadata | null
     name: row.name,
     permanent,
     burnAfterRead,
+    rawBytes: Number(row.raw_bytes ?? 0),
+    storedBytes: Number(row.stored_bytes ?? 0),
     createdAt: new Date(createdMs).toISOString(),
     updatedAt: new Date(updatedMs).toISOString(),
     expiresAt: expiresMs ? new Date(expiresMs).toISOString() : null,
@@ -298,21 +329,39 @@ export async function updatePaste(id: string, patch: UpdatePastePatch): Promise<
       updatedAt: new Date(nowMs).toISOString(),
     };
 
-    const compressed = await compressPayload(JSON.stringify(next));
-    await tx.execute(
-      `UPDATE pastes
-       SET name = ?, payload = ?, updated_at = ?, owner = ?, shared_with = ?, version = ?
-       WHERE id = ?`,
-      [
-        next.name,
-        compressed,
-        nowMs,
-        next.owner,
-        JSON.stringify(next.sharedWith),
-        next.version,
-        id,
-      ]
-    );
+    if (patch.content !== undefined) {
+      const compact = await compressContentCompact(next.content, tx.dialect);
+      await tx.execute(
+        `UPDATE pastes
+         SET name = ?, payload = ?, raw_bytes = ?, stored_bytes = ?, updated_at = ?, owner = ?, shared_with = ?, version = ?
+         WHERE id = ?`,
+        [
+          next.name,
+          compact.payload,
+          compact.rawBytes,
+          compact.storedBytes,
+          nowMs,
+          next.owner,
+          JSON.stringify(next.sharedWith),
+          next.version,
+          id,
+        ]
+      );
+    } else {
+      await tx.execute(
+        `UPDATE pastes
+         SET name = ?, updated_at = ?, owner = ?, shared_with = ?, version = ?
+         WHERE id = ?`,
+        [
+          next.name,
+          nowMs,
+          next.owner,
+          JSON.stringify(next.sharedWith),
+          next.version,
+          id,
+        ]
+      );
+    }
 
     return { status: 'ok', paste: next };
   });
@@ -321,6 +370,7 @@ export async function updatePaste(id: string, patch: UpdatePastePatch): Promise<
 export async function deletePaste(id: string): Promise<void> {
   const db = await getDb();
   await db.execute('DELETE FROM pastes WHERE id = ?', [id]);
+  await db.reclaimPages?.();
 }
 
 export async function deleteExpiredPastes(): Promise<string[]> {
@@ -332,6 +382,7 @@ export async function deleteExpiredPastes(): Promise<string[]> {
   );
   if (rows.length > 0) {
     await db.execute('DELETE FROM pastes WHERE expires_at IS NOT NULL AND expires_at <= ?', [nowMs]);
+    await db.reclaimPages?.();
   }
   return rows.map((r) => r.id);
 }
@@ -358,4 +409,165 @@ export async function getPastesPage(
   );
   const items = await Promise.all(rows.map(decodeRow));
   return { total, items };
+}
+
+export async function getUserPasteUsage(
+  email: string
+): Promise<{ pasteCount: number; rawBytes: number; storedBytes: number }> {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return { pasteCount: 0, rawBytes: 0, storedBytes: 0 };
+  const db = await getDb();
+  const nowMs = Date.now();
+  const row = await db.queryOne<{
+    paste_count: number | string;
+    raw_bytes: number | string;
+    stored_bytes: number | string;
+  }>(
+    `SELECT COUNT(*) AS paste_count,
+            COALESCE(SUM(raw_bytes), 0) AS raw_bytes,
+            COALESCE(SUM(stored_bytes), 0) AS stored_bytes
+     FROM pastes
+     WHERE owner = ? AND (permanent = 1 OR expires_at IS NULL OR expires_at > ?)`,
+    [normalized, nowMs]
+  );
+  return {
+    pasteCount: Number(row?.paste_count ?? 0),
+    rawBytes: Number(row?.raw_bytes ?? 0),
+    storedBytes: Number(row?.stored_bytes ?? 0),
+  };
+}
+
+export async function getAllUsersPasteUsage(): Promise<
+  Map<string, { pasteCount: number; storedBytes: number }>
+> {
+  const db = await getDb();
+  const nowMs = Date.now();
+  const rows = await db.query<{
+    owner: string;
+    paste_count: number | string;
+    stored_bytes: number | string;
+  }>(
+    `SELECT owner,
+            COUNT(*) AS paste_count,
+            COALESCE(SUM(stored_bytes), 0) AS stored_bytes
+     FROM pastes
+     WHERE owner IS NOT NULL AND (permanent = 1 OR expires_at IS NULL OR expires_at > ?)
+     GROUP BY owner`,
+    [nowMs]
+  );
+  const out = new Map<string, { pasteCount: number; storedBytes: number }>();
+  for (const r of rows) {
+    if (r.owner) {
+      out.set(normalizeEmail(r.owner), {
+        pasteCount: Number(r.paste_count ?? 0),
+        storedBytes: Number(r.stored_bytes ?? 0),
+      });
+    }
+  }
+  return out;
+}
+
+export async function getStorageStats(adapter?: SqlAdapter): Promise<StorageStats> {
+  const db = adapter ?? (await getDb());
+  const row = await db.queryOne<{
+    paste_count: number | string;
+    raw_bytes: number | string;
+    stored_bytes: number | string;
+  }>(
+    `SELECT COUNT(*) AS paste_count,
+            COALESCE(SUM(raw_bytes), 0) AS raw_bytes,
+            COALESCE(SUM(stored_bytes), 0) AS stored_bytes
+     FROM pastes`
+  );
+  const pasteCount = Number(row?.paste_count ?? 0);
+  const rawBytes = Number(row?.raw_bytes ?? 0);
+  const storedBytes = Number(row?.stored_bytes ?? 0);
+  const dbFileBytes = db.fileSizeBytes ? await db.fileSizeBytes() : null;
+  const savingsPercent =
+    rawBytes > 0 ? Math.max(0, Math.round((1 - storedBytes / rawBytes) * 1000) / 10) : 0;
+
+  return {
+    pasteCount,
+    rawBytes,
+    storedBytes,
+    dbFileBytes,
+    savingsPercent,
+  };
+}
+
+// Re-encodes all pastes into the ultra-compact Brotli-11 raw binary format
+// and runs SQLite VACUUM + WAL truncation to reclaim every unused 4 KB page on disk.
+export async function compactAllPastes(adapter?: SqlAdapter): Promise<StorageStats> {
+  const db = adapter ?? (await getDb());
+  const nowMs = Date.now();
+  await db.execute('DELETE FROM pastes WHERE expires_at IS NOT NULL AND expires_at <= ?', [nowMs]);
+
+  const rows = await db.query<PasteRow>('SELECT * FROM pastes');
+  if (rows.length > 0) {
+    const updates: Array<{
+      id: string;
+      payload: string | Buffer;
+      slidingTtl: number;
+      rawBytes: number;
+      storedBytes: number;
+      changed: boolean;
+    }> = [];
+
+    for (const row of rows) {
+      try {
+        const decoded = await decompressRowContent(row.payload);
+        const legacy = decoded.legacyMeta ?? {};
+        const permanent = Number(row.permanent) === 1;
+        const slidingTtl = permanent
+          ? 0
+          : row.sliding_ttl !== undefined
+            ? Number(row.sliding_ttl) !== 0 && legacy.slidingTtl !== false
+              ? 1
+              : 0
+            : legacy.slidingTtl === false
+              ? 0
+              : 1;
+
+        const compact = await compressContentCompact(decoded.content, db.dialect);
+        const currentStored = measureStoredBytes(row.payload);
+        const needsRewrite =
+          !decoded.isCompact ||
+          compact.storedBytes < currentStored ||
+          Number(row.raw_bytes ?? 0) !== compact.rawBytes ||
+          Number(row.stored_bytes ?? 0) !== Math.min(currentStored, compact.storedBytes);
+
+        if (needsRewrite) {
+          const useNew = !decoded.isCompact || compact.storedBytes <= currentStored;
+          const finalPayload = useNew ? compact.payload : (row.payload as string | Buffer);
+          const finalStored = useNew ? compact.storedBytes : currentStored;
+          updates.push({
+            id: row.id,
+            payload: finalPayload,
+            slidingTtl,
+            rawBytes: compact.rawBytes,
+            storedBytes: finalStored,
+            changed: true,
+          });
+        }
+      } catch {
+        // Leave unreadable row untouched
+      }
+    }
+
+    if (updates.length > 0) {
+      await db.transaction(async (tx) => {
+        for (const u of updates) {
+          await tx.execute(
+            `UPDATE pastes
+             SET payload = ?, sliding_ttl = ?, raw_bytes = ?, stored_bytes = ?
+             WHERE id = ?`,
+            [u.payload, u.slidingTtl, u.rawBytes, u.storedBytes, u.id]
+          );
+        }
+      });
+    }
+  }
+
+  await db.vacuum?.();
+  return getStorageStats(db);
 }

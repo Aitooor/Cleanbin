@@ -4,6 +4,8 @@ import { resolveOrigin } from '../services/auth.js';
 import { buildSetupUrl } from '../services/invites.js';
 import { sendInvitationEmail, sendPasswordResetEmail } from '../services/mailer.js';
 import { deletePasskey, hasPasskey } from '../services/passkeys.js';
+import { revokeUserApiTokens } from '../services/apiTokens.js';
+import { getAllUsersPasteUsage } from '../services/pastes.js';
 import { revokeUserSessions } from '../services/sessions.js';
 import {
   createUser,
@@ -38,14 +40,19 @@ usersRoutes.get('/api/users', async (c) => {
   const admin = await requireAdmin(c);
   if (admin instanceof Response) return admin;
 
-  const users = await listUsers();
-  const withPasskey = await Promise.all(
-    users.map(async (user) => ({
-      ...user,
-      hasPasskey: user.email ? await hasPasskey(user.email) : false,
-    }))
+  const [users, usageByOwner] = await Promise.all([listUsers(), getAllUsersPasteUsage()]);
+  const withDetails = await Promise.all(
+    users.map(async (user) => {
+      const usage = user.email ? usageByOwner.get(user.email.toLowerCase()) : undefined;
+      return {
+        ...user,
+        hasPasskey: user.email ? await hasPasskey(user.email) : false,
+        pasteCount: usage?.pasteCount ?? 0,
+        storedBytes: usage?.storedBytes ?? 0,
+      };
+    })
   );
-  return c.json(withPasskey);
+  return c.json(withDetails);
 });
 
 usersRoutes.post('/api/users', async (c) => {
@@ -135,6 +142,7 @@ usersRoutes.patch('/api/users/:email', async (c) => {
       await disableTotp(email);
       await deletePasskey(email);
       await revokeUserSessions(email);
+      await revokeUserApiTokens(email);
 
       const url = buildSetupUrl(token, resolveOrigin(c));
       const delivery = await sendPasswordResetEmail(email, url);
@@ -195,6 +203,7 @@ usersRoutes.delete('/api/users/:email', async (c) => {
     await deleteUser(email);
     await deletePasskey(email);
     await revokeUserSessions(email);
+    await revokeUserApiTokens(email);
     return c.json({ message: 'User deleted' });
   } catch (error) {
     if (error instanceof ImmutableUserError) return c.json({ message: error.message }, 403);

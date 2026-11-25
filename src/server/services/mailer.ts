@@ -76,10 +76,24 @@ async function sendSetupEmail(
   }
 }
 
+export function isMailerConfigured(): boolean {
+  return Boolean(process.env.RESEND_API_KEY?.trim() && process.env.MAIL_FROM?.trim());
+}
+
 export async function sendInvitationEmail(to: string, setupUrl: string): Promise<EmailDeliveryResult> {
   return sendSetupEmail(to, setupUrl, {
     subject: 'Set up your Cleanbin account',
     intro: 'You have been invited to Cleanbin.',
+  });
+}
+
+export async function sendRegistrationVerificationEmail(
+  to: string,
+  setupUrl: string
+): Promise<EmailDeliveryResult> {
+  return sendSetupEmail(to, setupUrl, {
+    subject: 'Verify your Cleanbin account',
+    intro: 'Confirm your email address to activate your Cleanbin account and configure 2FA.',
   });
 }
 

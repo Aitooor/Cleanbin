@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { startRegistration } from '@simplewebauthn/browser';
-import { Button, ConfirmModal, type ConfirmRequest } from '../../components/CleanUi';
+import { FiClipboard } from 'react-icons/fi';
+import { Button, ConfirmModal, IconButton, type ConfirmRequest } from '../../components/CleanUi';
 import { useNotification } from '../../components/NotificationProvider';
 import { useSession } from '../../hooks/useSession';
-import { describeUserAgent, formatDateTime } from '../../utils/format';
-import type { DashboardSessionInfo } from '../../../shared/types';
+import { describeUserAgent, formatBytes, formatDate, formatDateTime } from '../../utils/format';
+import type { ApiTokenInfo, DashboardSessionInfo, UserQuotaUsage } from '../../../shared/types';
 
 export default function AccountPage() {
   const navigate = useNavigate();
@@ -16,7 +17,15 @@ export default function AccountPage() {
   const [passkeyRegistered, setPasskeyRegistered] = useState<boolean | null>(null);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [sessions, setSessions] = useState<DashboardSessionInfo[] | null>(null);
+  const [tokens, setTokens] = useState<ApiTokenInfo[] | null>(null);
+  const [usage, setUsage] = useState<UserQuotaUsage | null>(null);
+  const [tokenLabel, setTokenLabel] = useState('');
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [freshToken, setFreshToken] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+
+  const originUrl =
+    typeof window !== 'undefined' ? window.location.origin : 'https://cleanbin.xyz';
 
   const loadSessions = useCallback(async () => {
     try {
@@ -26,6 +35,18 @@ export default function AccountPage() {
       setSessions(Array.isArray(data.sessions) ? data.sessions : []);
     } catch {
       setSessions([]);
+    }
+  }, []);
+
+  const loadTokensAndUsage = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tokens', { cache: 'no-store' });
+      if (!res.ok) throw new Error('tokens');
+      const data = await res.json();
+      setTokens(Array.isArray(data.tokens) ? data.tokens : []);
+      if (data.usage) setUsage(data.usage as UserQuotaUsage);
+    } catch {
+      setTokens([]);
     }
   }, []);
 
@@ -47,7 +68,8 @@ export default function AccountPage() {
 
   useEffect(() => {
     void loadSessions();
-  }, [loadSessions]);
+    void loadTokensAndUsage();
+  }, [loadSessions, loadTokensAndUsage]);
 
   const registerPasskey = async () => {
     setPasskeyBusy(true);
@@ -105,6 +127,50 @@ export default function AccountPage() {
     }
   };
 
+  const handleCreateToken = async () => {
+    if (tokenBusy) return;
+    const trimmed = tokenLabel.trim();
+    if (!trimmed) {
+      addNotification('Enter a label for the API token (e.g. laptop-cli).');
+      return;
+    }
+
+    setTokenBusy(true);
+    try {
+      const res = await fetch('/api/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 201 && typeof data.token === 'string') {
+        setTokenLabel('');
+        setFreshToken(data.token);
+        addNotification('API token created. Copy it now — it will not be shown again.');
+        await loadTokensAndUsage();
+      } else {
+        addNotification(data.message || 'Could not create API token.');
+      }
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
+  const handleRevokeToken = async (tok: ApiTokenInfo) => {
+    setTokenBusy(true);
+    try {
+      const res = await fetch(`/api/tokens/${encodeURIComponent(tok.id)}`, { method: 'DELETE' });
+      if (res.ok) {
+        addNotification('API token revoked.');
+        await loadTokensAndUsage();
+      } else {
+        addNotification('Could not revoke API token.');
+      }
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
   const revokeDevice = async (session: DashboardSessionInfo) => {
     const res = await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, {
       method: 'DELETE',
@@ -122,10 +188,21 @@ export default function AccountPage() {
     await loadSessions();
   };
 
+  const copyText = (text: string, msg: string) => {
+    navigator.clipboard?.writeText(text).then(
+      () => addNotification(msg),
+      () => addNotification('Could not copy to clipboard')
+    );
+  };
+
+  const cliCurlSnippet = freshToken
+    ? `cat file.txt | curl -fsS -H "Authorization: Bearer ${freshToken}" -H "X-TTL: permanent" -H "X-Name: My Snippet" --data-binary @- ${originUrl}/raw`
+    : `cat file.txt | curl -fsS --data-binary @- ${originUrl}/raw`;
+
   return (
     <>
       <div className="cb-panel">
-        <span className="cb-section-title">identity</span>
+        <span className="cb-section-title">identity & quota</span>
         <div className="cb-kv-row">
           <span className="cb-label">email</span>
           <span>{email}</span>
@@ -134,11 +211,123 @@ export default function AccountPage() {
           <span className="cb-label">role</span>
           <span className={`cb-tag ${isAdmin ? 'cb-tag--accent' : ''}`}>{role}</span>
         </div>
+        {usage && (
+          <div className="cb-kv-row">
+            <span className="cb-label">disk usage</span>
+            <span>
+              {usage.pasteCount}
+              {usage.maxPastesPerUser > 0 ? ` / ${usage.maxPastesPerUser}` : ''} pastes ·{' '}
+              {formatBytes(usage.storedBytes)}
+              {usage.maxStorageMbPerUser > 0 ? ` / ${usage.maxStorageMbPerUser} MB` : ' (unlimited)'} on disk
+            </span>
+          </div>
+        )}
         {!isAdmin && permanentDeleteLimit !== null && (
           <div className="cb-kv-row">
             <span className="cb-label">permanent delete cap</span>
             <span>{permanentDeleteLimit} per batch</span>
           </div>
+        )}
+      </div>
+
+      <div className="cb-panel">
+        <div className="cb-section-head">
+          <div>
+            <span className="cb-section-title">personal api tokens & cli</span>
+            <div className="cb-section-sub">
+              Pipe logs or files straight from your terminal via POST /raw (only SHA-256 hashes are stored).
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <label className="cb-field" style={{ flex: '1 1 220px' }}>
+            <span className="cb-label">token label</span>
+            <input
+              type="text"
+              className="cb-input"
+              placeholder="e.g. laptop-cli"
+              maxLength={80}
+              value={tokenLabel}
+              onChange={(e) => setTokenLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleCreateToken();
+              }}
+            />
+          </label>
+          <Button variant="primary" disabled={tokenBusy} onClick={() => void handleCreateToken()}>
+            create token
+          </Button>
+        </div>
+
+        {freshToken && (
+          <div className="cb-notice cb-notice--warn" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div>Copy your new API token now — it will never be displayed again:</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                className="cb-input"
+                readOnly
+                value={freshToken}
+                onFocus={(e) => e.target.select()}
+              />
+              <IconButton label="Copy API token" onClick={() => copyText(freshToken, 'API token copied')}>
+                <FiClipboard size={15} />
+              </IconButton>
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            className="cb-input"
+            readOnly
+            value={cliCurlSnippet}
+            onFocus={(e) => e.target.select()}
+            style={{ fontSize: 11, color: '#9e9e9e' }}
+          />
+          <IconButton label="Copy curl command" onClick={() => copyText(cliCurlSnippet, 'CLI command copied')}>
+            <FiClipboard size={15} />
+          </IconButton>
+        </div>
+
+        {tokens === null ? (
+          <div className="cb-section-sub">Loading tokens…</div>
+        ) : tokens.length === 0 ? (
+          <div className="cb-section-sub">No personal API tokens created yet.</div>
+        ) : (
+          tokens.map((tok) => (
+            <div className="cb-kv-row" key={tok.id}>
+              <div>
+                <div>
+                  {tok.name}{' '}
+                  <span style={{ color: '#888', fontSize: 11 }}>({tok.tokenPrefix}…)</span>
+                </div>
+                <div className="cb-section-sub">
+                  created {formatDate(tok.createdAt)} ·{' '}
+                  {tok.lastUsedAt ? `last used ${formatDateTime(tok.lastUsedAt)}` : 'never used'}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={tokenBusy}
+                onClick={() =>
+                  setConfirm({
+                    title: 'revoke api token',
+                    description: `Revoke token "${tok.name}" (${tok.tokenPrefix}…)? Scripts using it will stop working immediately.`,
+                    confirmLabel: 'Revoke',
+                    danger: true,
+                    onConfirm: () => {
+                      setConfirm(null);
+                      void handleRevokeToken(tok);
+                    },
+                  })
+                }
+              >
+                revoke
+              </Button>
+            </div>
+          ))
         )}
       </div>
 

@@ -84,6 +84,8 @@ export interface DashboardUser {
   invitePending: boolean;
   hasPasskey: boolean;
   immutable?: boolean;
+  pasteCount?: number;
+  storedBytes?: number;
 }
 
 export interface DashboardSessionInfo {
@@ -96,7 +98,36 @@ export interface DashboardSessionInfo {
   current: boolean;
 }
 
+export interface ApiTokenInfo {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export interface UserQuotaUsage {
+  pasteCount: number;
+  rawBytes: number;
+  storedBytes: number;
+  maxPastesPerUser: number;
+  maxStorageMbPerUser: number;
+}
+
+export interface StorageStats {
+  pasteCount: number;
+  rawBytes: number;
+  storedBytes: number;
+  dbFileBytes: number | null;
+  savingsPercent: number;
+}
+
 export interface AppSettings {
   registrationMode: RegistrationMode;
+  requireEmailVerification?: boolean;
   defaultUserDeleteLimit?: number;
+  maxPastesPerUser?: number;
+  maxStorageMbPerUser?: number;
+  mailerConfigured?: boolean;
+  storage?: StorageStats;
 }

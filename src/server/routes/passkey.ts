@@ -11,7 +11,7 @@ import {
   type WebAuthnCredential,
 } from '@simplewebauthn/server';
 import { getConfig } from '../config.js';
-import { requireSession } from '../middleware/auth.js';
+import { requireBrowserSession } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { resolveOrigin, resolveRpID, setSessionCookie } from '../services/auth.js';
 import {
@@ -153,7 +153,7 @@ passkeyRoutes.post('/api/auth/passkey/login', passkeyLoginLimiter, async (c) => 
 });
 
 passkeyRoutes.post('/api/auth/passkey/register-options', async (c) => {
-  const session = await requireSession(c);
+  const session = await requireBrowserSession(c);
   if (session instanceof Response) return session;
 
   const rpID = resolveRpID(c);
@@ -181,7 +181,7 @@ passkeyRoutes.post('/api/auth/passkey/register-options', async (c) => {
 });
 
 passkeyRoutes.post('/api/auth/passkey/register', async (c) => {
-  const session = await requireSession(c);
+  const session = await requireBrowserSession(c);
   if (session instanceof Response) return session;
 
   const body = await c.req.json().catch(() => ({}));
@@ -234,7 +234,7 @@ passkeyRoutes.post('/api/auth/passkey/register', async (c) => {
 });
 
 passkeyRoutes.delete('/api/auth/passkey', async (c) => {
-  const session = await requireSession(c);
+  const session = await requireBrowserSession(c);
   if (session instanceof Response) return session;
 
   const rpID = resolveRpID(c);
