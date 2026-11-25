@@ -6,9 +6,11 @@ import {
   FiCopy,
   FiDownload,
   FiEye,
+  FiEyeOff,
   FiFilePlus,
   FiFileText,
   FiLock,
+  FiSliders,
 } from 'react-icons/fi';
 import hljs from 'highlight.js/lib/core';
 import 'highlight.js/styles/github-dark.css';
@@ -37,6 +39,7 @@ import { listenBroadcast, postBroadcast } from '../utils/broadcast';
 import { decryptPastePayload, isEncryptedPasteContent } from '../utils/e2ee';
 import { renderSafeMarkdown } from '../utils/markdown';
 import { buildPasteTarget, parsePasteFragment, type LineRange } from '../utils/urlHash';
+import type { PasteTtlOption, PasteVisibility } from '../../shared/types';
 
 const LANGUAGES: Array<[string, Parameters<typeof hljs.registerLanguage>[1]]> = [
   ['javascript', javascript],
@@ -169,8 +172,14 @@ export default function PasteViewPage() {
   const [content, setContent] = useState('');
   const [name, setName] = useState('');
   const [permanent, setPermanent] = useState(false);
+  const [visibility, setVisibility] = useState<PasteVisibility>('public');
   const [burnAfterRead, setBurnAfterRead] = useState(false);
   const [burned, setBurned] = useState(false);
+  const [canManageState, setCanManageState] = useState(false);
+  const [showStateBar, setShowStateBar] = useState(false);
+  const [stateTtl, setStateTtl] = useState<'' | PasteTtlOption>('');
+  const [stateName, setStateName] = useState('');
+  const [stateBusy, setStateBusy] = useState(false);
   const [unopenedBurnPreview, setUnopenedBurnPreview] = useState(false);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [timeLeftLabel, setTimeLeftLabel] = useState<string | null>(null);
@@ -228,9 +237,16 @@ export default function PasteViewPage() {
         if (!active) return;
         const fetchedContent = typeof data.content === 'string' ? data.content : 'Failed to load paste.';
         const fetchedName = typeof data.name === 'string' ? data.name : '';
-        setPermanent(data.permanent === true || data.permanent === 'true');
-        setBurnAfterRead(Boolean(data.burnAfterRead));
+        const isPerm = data.permanent === true || data.permanent === 'true';
+        const isBurn = Boolean(data.burnAfterRead);
+        setPermanent(isPerm);
+        setVisibility(data.visibility === 'private' ? 'private' : 'public');
+        setBurnAfterRead(isBurn);
         setBurned(Boolean(data.burned));
+        setCanManageState(Boolean(data.canManageState));
+        setShowStateBar(false);
+        setStateName(fetchedName);
+        setStateTtl(isPerm ? 'permanent' : isBurn ? 'burn' : '');
 
         if (isEncryptedPasteContent(fetchedContent)) {
           setIsEncrypted(true);
@@ -518,6 +534,49 @@ export default function PasteViewPage() {
     });
   };
 
+  const handleStatePatch = async (patch: { visibility?: PasteVisibility; ttl?: PasteTtlOption }) => {
+    if (!id || stateBusy || !canManageState) return;
+    const effectiveName = stateName.trim() || name.trim();
+    if (patch.ttl === 'permanent' && !effectiveName) {
+      addNotification('Enter a name first before switching to Permanent.');
+      return;
+    }
+
+    setStateBusy(true);
+    try {
+      const payload: Record<string, unknown> = { ...patch };
+      if (stateName.trim() && stateName.trim() !== name.trim()) {
+        payload.name = stateName.trim();
+      }
+      const res = await fetch(`/api/paste/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        addNotification(data.message || data.error || 'Could not update paste state.');
+        return;
+      }
+      const saved = data.paste;
+      if (saved) {
+        setName(saved.name ?? '');
+        setStateName(saved.name ?? '');
+        setPermanent(Boolean(saved.permanent));
+        setVisibility(saved.visibility === 'private' ? 'private' : 'public');
+        setBurnAfterRead(Boolean(saved.burnAfterRead));
+        setExpiresAt(typeof saved.expiresAt === 'string' ? saved.expiresAt : null);
+        if (saved.permanent) setStateTtl('permanent');
+        else if (saved.burnAfterRead) setStateTtl('burn');
+        else if (patch.ttl) setStateTtl(patch.ttl);
+      }
+      postBroadcast({ type: 'paste_updated', id });
+      addNotification('Paste state updated.');
+    } finally {
+      setStateBusy(false);
+    }
+  };
+
   const renderNumberedLines = () => {
     const { linesHtml, importStart, importEnd, importCount } = parsedHighlight;
     const elements: React.ReactNode[] = [];
@@ -658,6 +717,21 @@ export default function PasteViewPage() {
         }}
       >
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
+          {visibility === 'private' && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 11,
+                color: '#ffb74d',
+                fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
+              }}
+              title="Private paste: accessible only to owner, collaborators, and admins"
+            >
+              <FiEyeOff size={11} /> Private
+            </span>
+          )}
           {isEncrypted && (
             <span
               style={{
@@ -804,6 +878,22 @@ export default function PasteViewPage() {
               >
                 <FiCopy size={17} />
               </button>
+              {canManageState && !unopenedBurnPreview && (
+                <button
+                  type="button"
+                  onClick={() => setShowStateBar((v) => !v)}
+                  title="Change paste state (visibility / expiration)"
+                  aria-label="Change paste state"
+                  style={{
+                    ...actionBtnStyle,
+                    color: showStateBar ? '#e0e0e0' : '#b0b0b0',
+                    borderColor: showStateBar ? '#555' : '#333',
+                    backgroundColor: showStateBar ? '#282828' : '#1e1e1e',
+                  }}
+                >
+                  <FiSliders size={16} />
+                </button>
+              )}
             </>
           )}
 
@@ -817,6 +907,95 @@ export default function PasteViewPage() {
             <FiFilePlus size={17} />
           </button>
         </div>
+
+        {showStateBar && canManageState && !needsKey && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              paddingTop: 6,
+              borderTop: '1px solid #2c2c2c',
+              width: '100%',
+            }}
+          >
+            {!name && (
+              <input
+                type="text"
+                placeholder="name (if permanent)"
+                value={stateName}
+                onChange={(e) => setStateName(e.target.value)}
+                style={{
+                  width: 140,
+                  height: 30,
+                  marginBottom: 0,
+                  padding: '0 8px',
+                  backgroundColor: '#1a1a1a',
+                  color: '#e0e0e0',
+                  border: '1px solid #333',
+                  borderRadius: 4,
+                  fontSize: 11,
+                  fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
+                }}
+              />
+            )}
+            <select
+              aria-label="Paste visibility"
+              disabled={stateBusy}
+              value={visibility}
+              onChange={(e) => void handleStatePatch({ visibility: e.target.value as PasteVisibility })}
+              style={{
+                width: 'auto',
+                height: 30,
+                marginBottom: 0,
+                padding: '0 8px',
+                backgroundColor: '#1a1a1a',
+                color: visibility === 'private' ? '#ffb74d' : '#b0b0b0',
+                border: '1px solid #333',
+                borderRadius: 4,
+                fontSize: 11,
+                fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="public">public</option>
+              <option value="private">private</option>
+            </select>
+            <select
+              aria-label="Paste lifecycle"
+              disabled={stateBusy}
+              value={stateTtl}
+              onChange={(e) => {
+                const nextTtl = e.target.value as PasteTtlOption | '';
+                if (!nextTtl) return;
+                void handleStatePatch({ ttl: nextTtl });
+              }}
+              style={{
+                width: 'auto',
+                height: 30,
+                marginBottom: 0,
+                padding: '0 8px',
+                backgroundColor: '#1a1a1a',
+                color: permanent ? '#90ee90' : '#b0b0b0',
+                border: '1px solid #333',
+                borderRadius: 4,
+                fontSize: 11,
+                fontFamily: 'Fira Mono, Menlo, Monaco, Consolas, monospace',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="">{permanent ? 'permanent' : burnAfterRead ? '1 read' : 'keep expiry'}</option>
+              <option value="30d">30d</option>
+              <option value="7d">7d</option>
+              <option value="24h">24h</option>
+              <option value="1h">1h</option>
+              <option value="burn">1 read</option>
+              <option value="permanent">permanent</option>
+            </select>
+          </div>
+        )}
       </div>
 
       {needsKey ? (

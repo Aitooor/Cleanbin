@@ -7,6 +7,7 @@ import { useSession } from '../hooks/useSession';
 interface SetupSecret {
   groupedSecret: string;
   otpauthUrl: string;
+  totpOptional: boolean;
 }
 
 const cleanBtnPrimary: React.CSSProperties = {
@@ -86,7 +87,11 @@ export default function SetupPage() {
         return;
       }
       setNeedsPasswordForm(false);
-      setSecret({ groupedSecret: data.groupedSecret, otpauthUrl: data.otpauthUrl });
+      setSecret({
+        groupedSecret: data.groupedSecret,
+        otpauthUrl: data.otpauthUrl,
+        totpOptional: Boolean(data.totpOptional),
+      });
     } catch {
       addNotification('Could not start the setup.');
     } finally {
@@ -120,10 +125,10 @@ export default function SetupPage() {
     await requestSecret({ token, password });
   };
 
-  const handleActivate = async () => {
+  const handleActivate = async (opts: { skipTotp?: boolean } = {}) => {
     if (busy || !secret) return;
     const normalizedCode = code.trim();
-    if (!/^\d{6}$/.test(normalizedCode)) {
+    if (!opts.skipTotp && !/^\d{6}$/.test(normalizedCode)) {
       addNotification('Enter the 6-digit code from your authenticator app.');
       return;
     }
@@ -134,7 +139,9 @@ export default function SetupPage() {
       const response = await fetch('/api/setup/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, code: normalizedCode }),
+        body: JSON.stringify(
+          opts.skipTotp ? { ...payload, skipTotp: true } : { ...payload, code: normalizedCode }
+        ),
       });
       const data = await response.json().catch(() => ({}));
       if (response.ok) {
@@ -226,7 +233,9 @@ export default function SetupPage() {
         {!fatal && secret && (
           <>
             <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888', lineHeight: 1.5 }}>
-              Scan this QR code or enter the secret key in your authenticator app, then type the 6-digit code.
+              {secret.totpOptional
+                ? 'Optional · Scan this QR code to enable 2FA, or skip and finish activation.'
+                : 'Required for admins · Scan this QR code or enter the secret key, then type the 6-digit code.'}
             </p>
 
             {qrSvg && (
@@ -281,6 +290,16 @@ export default function SetupPage() {
             >
               activate 2fa
             </button>
+            {secret.totpOptional && (
+              <button
+                onClick={() => void handleActivate({ skipTotp: true })}
+                disabled={busy}
+                className="login-secondary-button"
+                style={cleanBtnSecondary}
+              >
+                skip 2fa &amp; finish
+              </button>
+            )}
             <button
               onClick={() => navigate('/login')}
               className="login-secondary-button"

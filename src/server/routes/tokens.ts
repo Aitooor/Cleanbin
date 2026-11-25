@@ -7,7 +7,7 @@ import {
   listApiTokens,
   revokeApiToken,
 } from '../services/apiTokens.js';
-import { getUserPasteUsage } from '../services/pastes.js';
+import { getUserPasteUsage, getUserVisibilityCounts } from '../services/pastes.js';
 import { getServerSettings } from '../services/settings.js';
 
 export const tokensRoutes = new Hono();
@@ -16,20 +16,26 @@ tokensRoutes.get('/api/tokens', async (c) => {
   const session = await requireBrowserSession(c);
   if (session instanceof Response) return session;
 
-  const [tokens, usage, settings] = await Promise.all([
+  const [tokens, usage, counts, settings] = await Promise.all([
     listApiTokens(session.email),
     getUserPasteUsage(session.email),
+    getUserVisibilityCounts(session.email),
     getServerSettings(),
   ]);
 
+  const unlimited = session.role === 'admin';
   return c.json({
     tokens,
     usage: {
       pasteCount: usage.pasteCount,
+      publicCount: counts.publicCount,
+      privateCount: counts.privateCount,
       rawBytes: usage.rawBytes,
       storedBytes: usage.storedBytes,
-      maxPastesPerUser: session.role === 'admin' ? 0 : settings.maxPastesPerUser,
-      maxStorageMbPerUser: session.role === 'admin' ? 0 : settings.maxStorageMbPerUser,
+      maxPastesPerUser: unlimited ? 0 : settings.maxPastesPerUser,
+      maxPublicPastesPerUser: unlimited ? 0 : settings.maxPublicPastesPerUser,
+      maxPrivatePastesPerUser: unlimited ? 0 : settings.maxPrivatePastesPerUser,
+      maxStorageMbPerUser: unlimited ? 0 : settings.maxStorageMbPerUser,
     },
   });
 });

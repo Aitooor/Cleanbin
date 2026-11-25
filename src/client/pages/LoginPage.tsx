@@ -130,15 +130,20 @@ export default function LoginPage() {
       });
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.verificationEmailSent) {
-        addNotification('Verification link sent. Check your email to finish 2FA setup.');
+        addNotification('Verification link sent. Check your email to activate your account.');
         setPassword('');
         setConfirmPassword('');
         setMode('login');
         return;
       }
       if (response.ok && data.setupRequired && typeof data.challenge === 'string') {
-        addNotification('Account created. Configure mandatory 2FA to finish.');
+        addNotification('Account created. Configure 2FA to finish.');
         navigate(`/setup?challenge=${encodeURIComponent(data.challenge)}`);
+        return;
+      }
+      if (response.ok && data.authenticated) {
+        await refreshSession();
+        navigate('/dashboard');
         return;
       }
       addNotification(data.message || 'Registration failed.');
@@ -333,7 +338,7 @@ export default function LoginPage() {
         ) : mode === 'register' && registrationMode === 'open' ? (
           <>
             <p style={{ margin: '0 0 14px', fontSize: 12, color: '#888', lineHeight: 1.5 }}>
-              Create an account (mandatory 2FA setup on next step).
+              Create a free account (optional 2FA/passkeys can be configured later in settings).
             </p>
             <input
               type="email"

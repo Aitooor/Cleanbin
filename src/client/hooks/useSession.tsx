@@ -6,6 +6,7 @@ export interface SessionState {
   authenticated: boolean;
   email: string | null;
   role: SessionRole | null;
+  totpEnabled: boolean;
   permanentDeleteLimit: number | null;
   refreshSession: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -18,6 +19,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [authenticated, setAuthenticated] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
   const [role, setRole] = useState<SessionRole | null>(null);
+  const [totpEnabled, setTotpEnabled] = useState(false);
   const [permanentDeleteLimit, setPermanentDeleteLimit] = useState<number | null>(null);
 
   const refreshSession = useCallback(async () => {
@@ -28,6 +30,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setAuthenticated(!!data.authenticated);
       setEmail(data.email ?? null);
       setRole(data.role ?? null);
+      setTotpEnabled(Boolean(data.totpEnabled));
       setPermanentDeleteLimit(
         typeof data.permanentDeleteLimit === 'number' ? data.permanentDeleteLimit : null
       );
@@ -35,6 +38,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setAuthenticated(false);
       setEmail(null);
       setRole(null);
+      setTotpEnabled(false);
       setPermanentDeleteLimit(null);
     } finally {
       setLoading(false);
@@ -54,6 +58,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAuthenticated(false);
     setEmail(null);
     setRole(null);
+    setTotpEnabled(false);
     setPermanentDeleteLimit(null);
   }, []);
 
@@ -63,11 +68,12 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
       authenticated,
       email,
       role,
+      totpEnabled,
       permanentDeleteLimit,
       refreshSession,
       signOut,
     }),
-    [loading, authenticated, email, role, permanentDeleteLimit, refreshSession, signOut]
+    [loading, authenticated, email, role, totpEnabled, permanentDeleteLimit, refreshSession, signOut]
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

@@ -1,9 +1,10 @@
 import { normalizeEmail } from '../../shared/validation.js';
-import type { PasteScope, SessionRole } from '../../shared/types.js';
+import type { PasteScope, PasteVisibility, SessionRole } from '../../shared/types.js';
 
 export interface PasteAccessSubject {
   owner?: string | null;
   sharedWith?: string[];
+  visibility?: PasteVisibility;
 }
 
 export type PasteViewer = { email: string; role: SessionRole } | null;
@@ -33,6 +34,17 @@ export function canEdit(paste: PasteAccessSubject, viewer: PasteViewer): boolean
   return getOwner(paste) === email || getSharedWith(paste).includes(email);
 }
 
+export function canManageState(paste: PasteAccessSubject, viewer: PasteViewer): boolean {
+  if (!viewer) return false;
+  if (isAdmin(viewer)) return true;
+  return isOwner(paste, viewer.email);
+}
+
+export function canView(paste: PasteAccessSubject, viewer: PasteViewer): boolean {
+  if (paste.visibility !== 'private') return true;
+  return canEdit(paste, viewer);
+}
+
 export function resolveScope(scopeParam: string | undefined, viewer: PasteViewer): PasteScope {
   const requested = (scopeParam || '').toLowerCase();
   if (requested === 'all' || requested === 'mine' || requested === 'shared' || requested === 'anonymous') {
@@ -53,7 +65,7 @@ export function matchesScope(paste: PasteAccessSubject, viewer: PasteViewer, sco
     if (scope === 'anonymous') return owner === null;
     return true;
   }
-  if (!viewer) return owner === null;
+  if (!viewer) return owner === null && paste.visibility !== 'private';
   const email = normalizeEmail(viewer.email);
   if (scope === 'mine') return owner === email;
   if (scope === 'shared') return getSharedWith(paste).includes(email);
@@ -75,5 +87,6 @@ export function toAccessFields(paste: PasteAccessSubject, viewer: PasteViewer) {
     sharedWith: getSharedWith(paste),
     mine: !!email && getOwner(paste) === email,
     canEdit: canEdit(paste, viewer),
+    canManageState: canManageState(paste, viewer),
   };
 }

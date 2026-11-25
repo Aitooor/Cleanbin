@@ -5,6 +5,8 @@ const KEY_REG_MODE = 'registration_mode';
 const KEY_REQUIRE_EMAIL_VERIFICATION = 'require_email_verification';
 const KEY_DEFAULT_DELETE_LIMIT = 'default_user_delete_limit';
 const KEY_MAX_PASTES_PER_USER = 'max_pastes_per_user';
+const KEY_MAX_PUBLIC_PASTES_PER_USER = 'max_public_pastes_per_user';
+const KEY_MAX_PRIVATE_PASTES_PER_USER = 'max_private_pastes_per_user';
 const KEY_MAX_STORAGE_MB_PER_USER = 'max_storage_mb_per_user';
 
 export interface ServerSettings {
@@ -12,6 +14,8 @@ export interface ServerSettings {
   requireEmailVerification: boolean;
   defaultUserDeleteLimit: number;
   maxPastesPerUser: number;
+  maxPublicPastesPerUser: number;
+  maxPrivatePastesPerUser: number;
   maxStorageMbPerUser: number;
 }
 
@@ -38,13 +42,16 @@ async function setMetaValue(key: string, value: string): Promise<void> {
 }
 
 export async function getServerSettings(): Promise<ServerSettings> {
-  const [rawMode, rawVerify, rawLimit, rawMaxPastes, rawMaxStorageMb] = await Promise.all([
-    getMetaValue(KEY_REG_MODE),
-    getMetaValue(KEY_REQUIRE_EMAIL_VERIFICATION),
-    getMetaValue(KEY_DEFAULT_DELETE_LIMIT),
-    getMetaValue(KEY_MAX_PASTES_PER_USER),
-    getMetaValue(KEY_MAX_STORAGE_MB_PER_USER),
-  ]);
+  const [rawMode, rawVerify, rawLimit, rawMaxPastes, rawMaxPublic, rawMaxPrivate, rawMaxStorageMb] =
+    await Promise.all([
+      getMetaValue(KEY_REG_MODE),
+      getMetaValue(KEY_REQUIRE_EMAIL_VERIFICATION),
+      getMetaValue(KEY_DEFAULT_DELETE_LIMIT),
+      getMetaValue(KEY_MAX_PASTES_PER_USER),
+      getMetaValue(KEY_MAX_PUBLIC_PASTES_PER_USER),
+      getMetaValue(KEY_MAX_PRIVATE_PASTES_PER_USER),
+      getMetaValue(KEY_MAX_STORAGE_MB_PER_USER),
+    ]);
 
   const envFallback = process.env.REGISTRATION_MODE?.trim().toLowerCase() === 'open' ? 'open' : 'invite';
   const registrationMode: RegistrationMode =
@@ -55,9 +62,13 @@ export async function getServerSettings(): Promise<ServerSettings> {
   const parsedLimit = rawLimit !== null ? Number.parseInt(rawLimit, 10) : 2;
   const defaultUserDeleteLimit = Number.isInteger(parsedLimit) && parsedLimit >= 0 ? parsedLimit : 2;
 
-  const parsedMaxPastes = rawMaxPastes !== null ? Number.parseInt(rawMaxPastes, 10) : 100;
-  const maxPastesPerUser =
-    Number.isInteger(parsedMaxPastes) && parsedMaxPastes >= 0 ? parsedMaxPastes : 100;
+  const readCount = (raw: string | null, fallback: number): number => {
+    const parsed = raw !== null ? Number.parseInt(raw, 10) : fallback;
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+  };
+  const maxPastesPerUser = readCount(rawMaxPastes, 100);
+  const maxPublicPastesPerUser = readCount(rawMaxPublic, 0);
+  const maxPrivatePastesPerUser = readCount(rawMaxPrivate, 25);
 
   const parsedMaxMb = rawMaxStorageMb !== null ? Number.parseFloat(rawMaxStorageMb) : 10;
   const maxStorageMbPerUser =
@@ -68,6 +79,8 @@ export async function getServerSettings(): Promise<ServerSettings> {
     requireEmailVerification,
     defaultUserDeleteLimit,
     maxPastesPerUser,
+    maxPublicPastesPerUser,
+    maxPrivatePastesPerUser,
     maxStorageMbPerUser,
   };
 }
@@ -77,6 +90,8 @@ export async function updateServerSettings(patch: {
   requireEmailVerification?: boolean;
   defaultUserDeleteLimit?: number;
   maxPastesPerUser?: number;
+  maxPublicPastesPerUser?: number;
+  maxPrivatePastesPerUser?: number;
   maxStorageMbPerUser?: number;
 }): Promise<ServerSettings> {
   if (patch.registrationMode === 'invite' || patch.registrationMode === 'open') {
@@ -92,12 +107,15 @@ export async function updateServerSettings(patch: {
   ) {
     await setMetaValue(KEY_DEFAULT_DELETE_LIMIT, String(patch.defaultUserDeleteLimit));
   }
-  if (
-    patch.maxPastesPerUser !== undefined &&
-    Number.isInteger(patch.maxPastesPerUser) &&
-    patch.maxPastesPerUser >= 0
-  ) {
-    await setMetaValue(KEY_MAX_PASTES_PER_USER, String(patch.maxPastesPerUser));
+  const countKeys: Array<[number | undefined, string]> = [
+    [patch.maxPastesPerUser, KEY_MAX_PASTES_PER_USER],
+    [patch.maxPublicPastesPerUser, KEY_MAX_PUBLIC_PASTES_PER_USER],
+    [patch.maxPrivatePastesPerUser, KEY_MAX_PRIVATE_PASTES_PER_USER],
+  ];
+  for (const [value, key] of countKeys) {
+    if (value !== undefined && Number.isInteger(value) && value >= 0) {
+      await setMetaValue(key, String(value));
+    }
   }
   if (
     patch.maxStorageMbPerUser !== undefined &&

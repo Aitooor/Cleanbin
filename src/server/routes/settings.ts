@@ -39,6 +39,8 @@ settingsRoutes.patch('/api/settings', async (c) => {
     requireEmailVerification,
     defaultUserDeleteLimit,
     maxPastesPerUser,
+    maxPublicPastesPerUser,
+    maxPrivatePastesPerUser,
     maxStorageMbPerUser,
   } = (body ?? {}) as Record<string, unknown>;
 
@@ -47,8 +49,22 @@ settingsRoutes.patch('/api/settings', async (c) => {
     requireEmailVerification?: boolean;
     defaultUserDeleteLimit?: number;
     maxPastesPerUser?: number;
+    maxPublicPastesPerUser?: number;
+    maxPrivatePastesPerUser?: number;
     maxStorageMbPerUser?: number;
   } = {};
+
+  for (const [raw, field] of [
+    [maxPublicPastesPerUser, 'maxPublicPastesPerUser'],
+    [maxPrivatePastesPerUser, 'maxPrivatePastesPerUser'],
+  ] as const) {
+    if (raw === undefined) continue;
+    const parsed = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      return c.json({ message: `${field} must be an integer >= 0 (0 = unlimited)` }, 400);
+    }
+    patch[field] = parsed;
+  }
 
   if (registrationMode !== undefined) {
     if (registrationMode !== 'invite' && registrationMode !== 'open') {

@@ -4,6 +4,7 @@ export type UserStatus = 'invited' | 'active';
 export type RegistrationMode = 'invite' | 'open';
 
 export type PasteTtlOption = '1h' | '24h' | '7d' | '30d' | 'burn' | 'permanent';
+export type PasteVisibility = 'public' | 'private';
 
 export type PasteScope = 'all' | 'mine' | 'shared' | 'anonymous' | 'default';
 export type PasteFilterField = 'any' | 'name' | 'content' | 'id' | 'owner';
@@ -33,6 +34,7 @@ export interface PasteRecord {
   content: string;
   name: string;
   permanent: boolean;
+  visibility?: PasteVisibility;
   burnAfterRead?: boolean;
   burned?: boolean;
   slidingTtl?: boolean;
@@ -49,6 +51,7 @@ export interface ListedPaste {
   name: string;
   content?: string;
   permanent: boolean;
+  visibility?: PasteVisibility;
   burnAfterRead?: boolean;
   createdAt: string;
   updatedAt?: string;
@@ -57,6 +60,7 @@ export interface ListedPaste {
   sharedWith?: string[];
   mine?: boolean;
   canEdit?: boolean;
+  canManageState?: boolean;
   version?: number;
 }
 
@@ -108,9 +112,13 @@ export interface ApiTokenInfo {
 
 export interface UserQuotaUsage {
   pasteCount: number;
+  publicCount: number;
+  privateCount: number;
   rawBytes: number;
   storedBytes: number;
   maxPastesPerUser: number;
+  maxPublicPastesPerUser: number | null;
+  maxPrivatePastesPerUser: number | null;
   maxStorageMbPerUser: number;
 }
 
@@ -127,6 +135,8 @@ export interface AppSettings {
   requireEmailVerification?: boolean;
   defaultUserDeleteLimit?: number;
   maxPastesPerUser?: number;
+  maxPublicPastesPerUser?: number | null;
+  maxPrivatePastesPerUser?: number | null;
   maxStorageMbPerUser?: number;
   mailerConfigured?: boolean;
   storage?: StorageStats;
