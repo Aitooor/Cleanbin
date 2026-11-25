@@ -365,7 +365,24 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
   }
 
   if (path === '/api/auth/passkey/status') {
-    return jsonResponse({ registered: false, hasPasskey: false });
+    const qEmail = (url.searchParams.get('email') || currentUser?.email || '').trim().toLowerCase();
+    const u = qEmail ? users.get(qEmail) : undefined;
+    const anyReg = Array.from(users.values()).some((item) => item.hasPasskey && item.email === 'demo@example.com');
+    return jsonResponse({ registered: anyReg, hasPasskey: Boolean(u?.hasPasskey) });
+  }
+
+  if (path === '/api/auth/passkey/register' && method === 'POST') {
+    if (!currentUser) return jsonResponse({ message: 'Unauthorized' }, 401);
+    const u = users.get(currentUser.email);
+    if (u) u.hasPasskey = true;
+    return jsonResponse({ verified: true, passwordLoginDisabled: true, totpRemoved: false });
+  }
+
+  if (path === '/api/auth/passkey' && method === 'DELETE') {
+    if (!currentUser) return jsonResponse({ message: 'Unauthorized' }, 401);
+    const u = users.get(currentUser.email);
+    if (u) u.hasPasskey = false;
+    return jsonResponse({ message: 'Passkey removed' });
   }
 
   // Sessions (/api/sessions)

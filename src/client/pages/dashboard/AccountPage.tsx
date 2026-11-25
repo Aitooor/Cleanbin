@@ -52,6 +52,18 @@ export default function AccountPage() {
   const registerPasskey = async () => {
     setPasskeyBusy(true);
     try {
+      if (import.meta.env.VITE_DEMO_MODE === '1') {
+        const demoRes = await fetch('/api/auth/passkey/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ demo: true }),
+        });
+        if (demoRes.ok) {
+          setPasskeyRegistered(true);
+          addNotification('Simulated passkey active in memory for this demo tab.');
+        }
+        return;
+      }
       const optRes = await fetch('/api/auth/passkey/register-options', { method: 'POST' });
       if (!optRes.ok) {
         addNotification('Could not start passkey registration.');
