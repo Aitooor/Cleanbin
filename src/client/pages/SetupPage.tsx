@@ -234,7 +234,9 @@ export default function SetupPage() {
           <>
             <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888', lineHeight: 1.5 }}>
               {secret.totpOptional
-                ? 'Optional · Scan this QR code to enable 2FA, or skip and finish activation.'
+                ? preVerifiedPassword
+                  ? 'Email verified · Finish without 2FA below, or optionally scan this QR code to enable 2FA.'
+                  : 'Optional · Scan this QR code to enable 2FA, or skip and finish activation.'
                 : 'Required for admins · Scan this QR code or enter the secret key, then type the 6-digit code.'}
             </p>
 
