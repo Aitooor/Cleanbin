@@ -29,10 +29,10 @@ Minimalist, self-hosted pastebin built with **Hono + Vite + React 19 + SQL** (`S
 
 ## Features
 
-- **Minimalist Dark UI (`#1e1e1e`)**: Full-screen distraction-free editor (`/`), syntax-highlighted viewer with collapsible `import` blocks (`/:id`), and a matching flat 4-section dashboard (`/dashboard`).
-- **Temporary & Permanent Pastes**: Anonymous pastes expire automatically after `PASTE_EXPIRATION_DAYS` (refreshed when viewed); authenticated accounts can store named permanent pastes, share edit access with teammates, and resolve concurrent edits safely (`409` optimistic locking + live editing indicator).
-- **Zero-Trust Account Security**: Mandatory RFC 6238 **TOTP 2FA** (with anti-replay protection) or **WebAuthn Passkeys**, signed `HttpOnly` session cookies backed by revocable per-device SQL sessions, single-use email/manual invitations, and built-in sliding-window rate limiting.
-- **Unified SQL Storage + Automatic v1 Migration**: Stores pastes (Brotli-compressed), users, sessions, and passkeys in `SQLite` (default), `MariaDB/MySQL`, or `PostgreSQL`. Automatically upgrades existing Cleanbin v1 `data/pastes.db` and imports legacy `users.json` / `sessions.json` / `passkeys.json` on first boot without deleting the original files.
+- **Minimalist Dark UI (`#1e1e1e`)**: Full-screen distraction-free editor (`/` with `Ctrl+S` save & 2-space `Tab`/`Shift+Tab` indentation), syntax-highlighted viewer across 19 languages with collapsible `import` blocks, clickable line-range links (`#L12` / `#L10-L25`), and Copy / Raw (`/raw/:id`) / Clone actions (`/:id`), plus a flat 4-section dashboard (`/dashboard`).
+- **Privacy, Selectable TTL & Burn-After-Read**: Choose per-paste expiration (`1h`, `24h`, `7d`, `30d`, `1 read` burn-after-read with atomic self-destruction on first open, or `Permanent` for signed-in users) and optional **zero-knowledge client-side E2EE (`AES-256-GCM`)** where the decryption key stays strictly in the URL `#k=...` fragment and never reaches the server.
+- **Zero-Trust Account Security & Flexible Registration**: Administrators can switch account creation between **Invite-only** and **Open registration** directly from `/dashboard/users`. Every account enforces mandatory RFC 6238 **TOTP 2FA** (with anti-replay protection) or **WebAuthn Passkeys**, signed `HttpOnly` session cookies backed by revocable SQL sessions, and sliding-window rate limiting.
+- **Unified SQL Storage + Automatic v1 Migration**: Stores pastes (Brotli-compressed), users, sessions, passkeys, and settings in `SQLite` (default), `MariaDB/MySQL`, or `PostgreSQL`. Automatically upgrades existing Cleanbin v1 `data/pastes.db` and imports legacy `users.json` / `sessions.json` / `passkeys.json` on first boot without deleting the original files.
 
 ## Quick Start
 

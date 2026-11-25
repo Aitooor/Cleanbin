@@ -3,13 +3,14 @@
 // Stores data strictly in JS heap memory for the lifetime of the browser tab;
 // nothing is ever persisted to disk, cookies, localStorage, or any external server.
 
-import type { PasteFilterRule } from '../../shared/types';
+import type { PasteFilterRule, PasteTtlOption, RegistrationMode } from '../../shared/types';
 
 interface DemoPaste {
   id: string;
   name: string;
   content: string;
   permanent: boolean;
+  burnAfterRead?: boolean;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
@@ -44,12 +45,16 @@ let pastes = new Map<string, DemoPaste>();
 let users = new Map<string, DemoUser>();
 let sessions: DemoSession[] = [];
 let currentUser: { email: string; role: 'admin' | 'user'; permanentDeleteLimit: number | null } | null = null;
+let demoRegistrationMode: RegistrationMode = 'invite';
+let demoDefaultDeleteLimit = 2;
 
 export function resetDemoState(): void {
   const now = Date.now();
   const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString();
 
   currentUser = { email: 'demo@example.com', role: 'admin', permanentDeleteLimit: null };
+  demoRegistrationMode = 'invite';
+  demoDefaultDeleteLimit = 2;
 
   users = new Map<string, DemoUser>([
     [
@@ -349,6 +354,54 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
   const path = url.pathname;
   const baseUrl = import.meta.env.BASE_URL || '/Cleanbin/';
 
+  // Settings (/api/settings)
+  if (path === '/api/settings' && method === 'GET') {
+    return jsonResponse({
+      registrationMode: demoRegistrationMode,
+      ...(currentUser?.role === 'admin' ? { defaultUserDeleteLimit: demoDefaultDeleteLimit } : {}),
+    });
+  }
+
+  if (path === '/api/settings' && method === 'PATCH') {
+    if (currentUser?.role !== 'admin') return jsonResponse({ message: 'Forbidden' }, 403);
+    const body = await parseJson(init);
+    if (body.registrationMode === 'invite' || body.registrationMode === 'open') {
+      demoRegistrationMode = body.registrationMode;
+    }
+    if (typeof body.defaultUserDeleteLimit === 'number' && body.defaultUserDeleteLimit >= 0) {
+      demoDefaultDeleteLimit = Math.floor(body.defaultUserDeleteLimit);
+    }
+    return jsonResponse({
+      registrationMode: demoRegistrationMode,
+      defaultUserDeleteLimit: demoDefaultDeleteLimit,
+    });
+  }
+
+  if (path === '/api/auth/register' && method === 'POST') {
+    if (demoRegistrationMode !== 'open') {
+      return jsonResponse({ message: 'Public registration is disabled.' }, 403);
+    }
+    const body = await parseJson(init);
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+    if (!email || !email.includes('@')) return jsonResponse({ message: 'A valid email is required' }, 400);
+    if (password.length < 10) return jsonResponse({ message: 'Password must be at least 10 characters.' }, 400);
+    if (users.has(email)) return jsonResponse({ message: 'An account with this email already exists.' }, 409);
+
+    users.set(email, {
+      email,
+      role: 'user',
+      status: 'active',
+      permanentDeleteLimit: demoDefaultDeleteLimit,
+      totpEnabled: false,
+      invitePending: false,
+      hasPasskey: false,
+      immutable: false,
+      createdAt: new Date().toISOString(),
+    });
+    return jsonResponse({ setupRequired: true, email, challenge: `demo-reg-${encodeURIComponent(email)}` }, 201);
+  }
+
   // Auth & Session
   if (path === '/api/auth' && method === 'GET') {
     if (!currentUser) {
@@ -422,6 +475,9 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     const id = url.searchParams.get('id') || '';
     const found = pastes.get(id);
     if (!found) return jsonResponse({ message: 'Paste not found' }, 404);
+    if (found.burnAfterRead) {
+      return jsonResponse({ message: 'One-time pastes cannot be preloaded without opening them' }, 403);
+    }
     return jsonResponse({
       id: found.id,
       content: found.content,
@@ -434,12 +490,26 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     const body = await parseJson(init);
     const content = typeof body.content === 'string' ? body.content : '';
     const name = typeof body.name === 'string' ? body.name.trim() : '';
-    const permanent = Boolean(currentUser && body.permanent !== false && body.permanent !== 'false');
+    const ttl = (typeof body.ttl === 'string' ? body.ttl : undefined) as PasteTtlOption | undefined;
+    const wantsPerm =
+      ttl === 'permanent' ||
+      (ttl === undefined && body.permanent !== false && body.permanent !== 'false' && body.burnAfterRead !== true);
+    const permanent = Boolean(currentUser && wantsPerm);
+    const burnAfterRead = !permanent && (body.burnAfterRead === true || ttl === 'burn');
     if (!content.trim()) return jsonResponse({ message: 'Content cannot be empty' }, 400);
     if (permanent && !name) return jsonResponse({ message: 'Name is required for permanent pastes.' }, 400);
 
     let id = randomShortId();
     while (pastes.has(id)) id = randomShortId();
+
+    const ttlMs =
+      ttl === '1h'
+        ? 3_600_000
+        : ttl === '24h'
+          ? 86_400_000
+          : ttl === '7d' || burnAfterRead
+            ? 7 * 86_400_000
+            : 30 * 86_400_000;
 
     const nowIso = new Date().toISOString();
     const record: DemoPaste = {
@@ -447,15 +517,16 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
       name,
       content,
       permanent,
+      burnAfterRead,
       createdAt: nowIso,
       updatedAt: nowIso,
-      ...(permanent ? {} : { expiresAt: new Date(Date.now() + 30 * 86400_000).toISOString() }),
+      ...(permanent ? {} : { expiresAt: new Date(Date.now() + ttlMs).toISOString() }),
       owner: permanent && currentUser ? currentUser.email : null,
       sharedWith: [],
       version: 1,
     };
     pastes.set(id, record);
-    return jsonResponse({ id }, 201);
+    return jsonResponse({ id, burnAfterRead }, 201);
   }
 
   if (path === '/api/pastes/presence' && method === 'GET') {
@@ -507,10 +578,22 @@ async function handleApiRequest(url: URL, method: string, init?: RequestInit): P
     if (!item) return jsonResponse({ message: 'Paste not found' }, 404);
 
     if (method === 'GET') {
-      if (url.searchParams.get('touch') === '1' && !item.permanent) {
-        item.expiresAt = new Date(Date.now() + 30 * 86400_000).toISOString();
+      if (url.searchParams.get('touch') === '1') {
+        if (item.burnAfterRead) {
+          pastes.delete(id);
+          return jsonResponse({
+            ...decoratePaste(item),
+            burnAfterRead: true,
+            burned: true,
+            expiresAt: null,
+            canEdit: false,
+          });
+        }
+        if (!item.permanent) {
+          item.expiresAt = new Date(Date.now() + 30 * 86400_000).toISOString();
+        }
       }
-      return jsonResponse(decoratePaste(item));
+      return jsonResponse({ ...decoratePaste(item), burned: false });
     }
 
     if (method === 'PATCH' || method === 'PUT') {

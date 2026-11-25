@@ -10,6 +10,7 @@ import { passkeyRoutes } from './routes/passkey.js';
 import { setupRoutes } from './routes/setup.js';
 import { usersRoutes } from './routes/users.js';
 import { sessionsRoutes } from './routes/sessions.js';
+import { settingsRoutes } from './routes/settings.js';
 
 const MIME_BY_EXT: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -63,6 +64,7 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   app.route('/', setupRoutes);
   app.route('/', usersRoutes);
   app.route('/', sessionsRoutes);
+  app.route('/', settingsRoutes);
 
   app.all('/api/*', (c) => {
     return c.json({ error: 'Not found', message: 'API route not found' }, 404);

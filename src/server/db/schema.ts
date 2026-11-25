@@ -47,6 +47,22 @@ async function upgradeExistingSqliteSchema(adapter: SqlAdapter): Promise<void> {
     if (!existing.has('version')) {
       await adapter.execute('ALTER TABLE pastes ADD COLUMN version INTEGER NOT NULL DEFAULT 1');
     }
+    if (!existing.has('burn_after_read')) {
+      await adapter.execute('ALTER TABLE pastes ADD COLUMN burn_after_read INTEGER NOT NULL DEFAULT 0');
+    }
+  }
+}
+
+async function upgradeNonSqlitePastesColumns(adapter: SqlAdapter): Promise<void> {
+  if (adapter.dialect === 'postgres') {
+    await adapter.execute(
+      'ALTER TABLE pastes ADD COLUMN IF NOT EXISTS burn_after_read INTEGER NOT NULL DEFAULT 0'
+    );
+  } else if (adapter.dialect === 'mysql') {
+    const cols = await adapter.query('SHOW COLUMNS FROM pastes LIKE ?', ['burn_after_read']);
+    if (cols.length === 0) {
+      await adapter.execute('ALTER TABLE pastes ADD COLUMN burn_after_read INTEGER NOT NULL DEFAULT 0');
+    }
   }
 }
 
@@ -71,11 +87,13 @@ export async function ensureSchema(adapter: SqlAdapter): Promise<void> {
       expires_at BIGINT NULL,
       owner VARCHAR(255) NULL,
       shared_with TEXT NOT NULL,
-      version INTEGER NOT NULL DEFAULT 1
+      version INTEGER NOT NULL DEFAULT 1,
+      burn_after_read INTEGER NOT NULL DEFAULT 0
     )
   `);
 
   await upgradeExistingSqliteSchema(adapter);
+  await upgradeNonSqlitePastesColumns(adapter);
 
   await createIndexSafe(adapter, 'idx_pastes_expires_at', 'pastes', 'expires_at');
   await createIndexSafe(adapter, 'idx_pastes_created_at', 'pastes', 'created_at');

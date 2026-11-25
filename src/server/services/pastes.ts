@@ -2,13 +2,14 @@ import { getConfig } from '../config.js';
 import { getDb } from '../db/index.js';
 import { compressPayload, decompressPayload } from '../db/compression.js';
 import { normalizeEmail } from '../../shared/validation.js';
-import type { PasteRecord } from '../../shared/types.js';
+import type { PasteRecord, PasteTtlOption } from '../../shared/types.js';
 
 interface PasteRow {
   id: string;
   name: string;
   payload: string;
   permanent: number | string;
+  burn_after_read?: number | string;
   created_at: number | string;
   updated_at: number | string;
   expires_at: number | string | null;
@@ -21,12 +22,19 @@ export interface PasteMetadata {
   id: string;
   name: string;
   permanent: boolean;
+  burnAfterRead: boolean;
   createdAt: string;
   updatedAt: string;
   expiresAt: string | null;
   owner: string | null;
   sharedWith: string[];
   version: number;
+}
+
+export interface CreatePasteOptions {
+  ttl?: PasteTtlOption;
+  burnAfterRead?: boolean;
+  sharedWith?: string[];
 }
 
 export interface UpdatePastePatch {
@@ -41,6 +49,13 @@ export type UpdatePasteResult =
   | { status: 'ok'; paste: PasteRecord }
   | { status: 'not_found' }
   | { status: 'conflict'; paste: PasteRecord };
+
+const TTL_MS_BY_OPTION: Record<'1h' | '24h' | '7d' | '30d', number> = {
+  '1h': 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
 
 function parseSharedWith(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -63,6 +78,8 @@ function isRowExpired(row: Pick<PasteRow, 'permanent' | 'expires_at'>, nowMs = D
 async function decodeRow(row: PasteRow): Promise<PasteRecord> {
   const decoded = JSON.parse(await decompressPayload(row.payload)) as Record<string, unknown>;
   const permanent = Number(row.permanent) === 1;
+  const burnAfterRead =
+    Number(row.burn_after_read ?? 0) === 1 || decoded.burnAfterRead === true;
   const createdAtMs = Number(row.created_at) || Date.now();
   const updatedAtMs = Number(row.updated_at) || createdAtMs;
   const expiresAtMs = !permanent && row.expires_at !== null ? Number(row.expires_at) : null;
@@ -72,6 +89,8 @@ async function decodeRow(row: PasteRow): Promise<PasteRecord> {
     content: typeof decoded.content === 'string' ? decoded.content : '',
     name: row.name ?? (typeof decoded.name === 'string' ? decoded.name : ''),
     permanent,
+    burnAfterRead,
+    slidingTtl: decoded.slidingTtl !== false,
     createdAt: new Date(createdAtMs).toISOString(),
     updatedAt: new Date(updatedAtMs).toISOString(),
     expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : null,
@@ -81,7 +100,7 @@ async function decodeRow(row: PasteRow): Promise<PasteRecord> {
   };
 }
 
-function computeNextExpiryMs(nowMs = Date.now()): number {
+function computeDefaultExpiryMs(nowMs = Date.now()): number {
   const days = getConfig().pasteExpirationDays;
   return nowMs + days * 24 * 60 * 60 * 1000;
 }
@@ -91,40 +110,79 @@ export async function createPaste(
   content: string,
   name: string,
   permanent: boolean,
-  owner: string | null = null
+  owner: string | null = null,
+  sharedWithOrOptions?: string[] | CreatePasteOptions
 ): Promise<PasteRecord> {
+  const opts: CreatePasteOptions = Array.isArray(sharedWithOrOptions)
+    ? { sharedWith: sharedWithOrOptions }
+    : sharedWithOrOptions ?? {};
+
+  const burnAfterRead = !permanent && (opts.burnAfterRead === true || opts.ttl === 'burn');
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
-  const expiresAtMs = permanent ? null : computeNextExpiryMs(nowMs);
+
+  let expiresAtMs: number | null = null;
+  let slidingTtl = true;
+
+  if (!permanent) {
+    if (opts.ttl === '1h' || opts.ttl === '24h' || opts.ttl === '7d') {
+      expiresAtMs = nowMs + TTL_MS_BY_OPTION[opts.ttl];
+      slidingTtl = false;
+    } else if (burnAfterRead) {
+      // Unopened burn-after-read pastes auto-expire after 7 days if never read.
+      expiresAtMs = nowMs + TTL_MS_BY_OPTION['7d'];
+      slidingTtl = false;
+    } else {
+      expiresAtMs = computeDefaultExpiryMs(nowMs);
+      slidingTtl = true;
+    }
+  }
+
   const normalizedOwner = owner ? normalizeEmail(owner) : null;
+  const shared = (opts.sharedWith ?? []).map((e) => normalizeEmail(e)).filter(Boolean);
 
   const record: PasteRecord = {
     id,
     content,
     name,
     permanent,
+    burnAfterRead,
+    slidingTtl,
     createdAt: nowIso,
     updatedAt: nowIso,
     expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : null,
     owner: normalizedOwner,
-    sharedWith: [],
+    sharedWith: shared,
     version: 1,
   };
 
   const payload = await compressPayload(JSON.stringify(record));
   const db = await getDb();
   await db.execute(
-    `INSERT INTO pastes (id, name, payload, permanent, created_at, updated_at, expires_at, owner, shared_with, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', 1)`,
-    [id, name, payload, permanent ? 1 : 0, nowMs, nowMs, expiresAtMs, normalizedOwner]
+    `INSERT INTO pastes (id, name, payload, permanent, burn_after_read, created_at, updated_at, expires_at, owner, shared_with, version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [
+      id,
+      name,
+      payload,
+      permanent ? 1 : 0,
+      burnAfterRead ? 1 : 0,
+      nowMs,
+      nowMs,
+      expiresAtMs,
+      normalizedOwner,
+      JSON.stringify(shared),
+    ]
   );
 
   return record;
 }
 
-// Reads a paste by ID. Only when `options.touch === true` (an actual visit to
-// the public paste view) is a temporary paste's TTL extended. Internal reads
-// (dashboard edit, presence checks, delete permission checks) leave TTL intact.
+// Reads a paste by ID.
+// - When `options.touch === true` (an actual visit to `/:id` or `/raw/:id`):
+//   * If `burnAfterRead` is true, atomically deletes the paste from SQL and returns `burned: true`.
+//   * If `slidingTtl` is true on a temporary paste, extends `expires_at` by `PASTE_EXPIRATION_DAYS`.
+// - Internal reads (`touch: false`) never burn or extend TTL.
 export async function getPaste(
   id: string,
   options: { touch?: boolean } = {}
@@ -151,9 +209,21 @@ export async function getPaste(
     }
 
     const decoded = await decodeRow(row);
-    if (decoded.permanent) return decoded;
 
-    const newExpiresMs = computeNextExpiryMs(nowMs);
+    if (decoded.burnAfterRead) {
+      await tx.execute('DELETE FROM pastes WHERE id = ?', [id]);
+      return {
+        ...decoded,
+        burned: true,
+        expiresAt: null,
+      };
+    }
+
+    if (decoded.permanent || decoded.slidingTtl === false) {
+      return decoded;
+    }
+
+    const newExpiresMs = computeDefaultExpiryMs(nowMs);
     const refreshed: PasteRecord = {
       ...decoded,
       expiresAt: new Date(newExpiresMs).toISOString(),
@@ -172,7 +242,7 @@ export async function getPaste(
 export async function getPasteMetadata(id: string): Promise<PasteMetadata | null> {
   const db = await getDb();
   const row = await db.queryOne<Omit<PasteRow, 'payload'>>(
-    'SELECT id, name, permanent, created_at, updated_at, expires_at, owner, shared_with, version FROM pastes WHERE id = ?',
+    'SELECT id, name, permanent, burn_after_read, created_at, updated_at, expires_at, owner, shared_with, version FROM pastes WHERE id = ?',
     [id]
   );
   if (!row) return null;
@@ -181,6 +251,7 @@ export async function getPasteMetadata(id: string): Promise<PasteMetadata | null
     return null;
   }
   const permanent = Number(row.permanent) === 1;
+  const burnAfterRead = Number(row.burn_after_read ?? 0) === 1;
   const createdMs = Number(row.created_at) || Date.now();
   const updatedMs = Number(row.updated_at) || createdMs;
   const expiresMs = !permanent && row.expires_at !== null ? Number(row.expires_at) : null;
@@ -188,6 +259,7 @@ export async function getPasteMetadata(id: string): Promise<PasteMetadata | null
     id: row.id,
     name: row.name,
     permanent,
+    burnAfterRead,
     createdAt: new Date(createdMs).toISOString(),
     updatedAt: new Date(updatedMs).toISOString(),
     expiresAt: expiresMs ? new Date(expiresMs).toISOString() : null,
